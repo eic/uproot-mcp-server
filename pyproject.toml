@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "uproot-mcp-server"
+version = "0.1.0"
+description = "MCP server for uproot-based ROOT file analysis in EIC data analysis workflows"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "uproot>=5.0.0",
+    "numpy>=1.24.0",
+    "awkward>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+uproot-mcp-server = "uproot_mcp_server.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/uproot_mcp_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
