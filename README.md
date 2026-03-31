@@ -26,7 +26,7 @@ integration.
 git clone https://github.com/eic/uproot-mcp-server.git
 cd uproot-mcp-server
 python -m venv .venv
-source .venv/bin/activate   # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -e .
 ```
 
@@ -51,7 +51,7 @@ pip install -e ".[xrootd]"
 ### Starting the server (stdio transport)
 
 ```bash
-source .venv/bin/activate   # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 python -m uproot_mcp_server.server
 # or, after pip install:
 uproot-mcp-server
@@ -73,7 +73,6 @@ to the executable inside the virtual environment:
 ```
 
 Replace `/path/to/uproot-mcp-server` with the absolute path to the cloned repository.
-On Windows use `.venv\Scripts\uproot-mcp-server.exe` instead.
 
 ### Available tools
 
@@ -138,7 +137,7 @@ Response includes `edges` (bin boundaries), `counts`, `underflow`, `overflow`, `
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
