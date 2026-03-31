@@ -1,26 +1,43 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.12-slim
+# ---- Build stage ----
+FROM python:3.12-slim AS builder
 
-# Install system dependencies for uproot/XRootD
+# Install build dependencies needed to compile xrootd from source on non-x86_64
+# (pre-built manylinux wheels are only available for x86_64)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    ca-certificates && \
+    cmake \
+    g++ \
+    libssl-dev \
+    uuid-dev \
+    zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+WORKDIR /build
 
-# Copy project metadata and install dependencies
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
-# Install the package with all dependencies
 RUN pip install --no-cache-dir ".[xrootd]" && \
     pip cache purge
 
+# ---- Runtime stage ----
+FROM python:3.12-slim
+
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libuuid1 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy installed Python packages and entrypoint from builder
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin/uproot-mcp-server /usr/local/bin/uproot-mcp-server
+
 # Use non-root user for security
-RUN useradd -r -s /bin/false appuser && \
-    chown -R appuser:appuser /app
+RUN useradd -r -s /bin/false appuser
 
 USER appuser
 
