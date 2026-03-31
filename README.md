@@ -184,7 +184,7 @@ The kernel receives a `dict[branch_name, array]` and may return an array, scalar
 
 For scalar or dict results, `result_type` is `"scalar"` or `"dict"` and pagination fields are absent.
 
-**Execution timeout:** kernels are terminated after 30 seconds.
+**Execution timeout:** kernels run in an isolated subprocess that is forcefully terminated (SIGTERM then SIGKILL) after 30 seconds of wall-clock time.
 
 ## Development
 

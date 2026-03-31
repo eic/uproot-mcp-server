@@ -12,15 +12,18 @@ in a restricted namespace that:
 - Blocks ``exec``, ``eval``, ``open``, ``compile`` and other dangerous builtins
 - Blocks explicit dunder (``__``) attribute access in kernel code
 - Prevents writes to the injected ``np`` / ``ak`` modules
-- Enforces a configurable wall-clock timeout via a daemon thread
+- Enforces a configurable wall-clock timeout by running the kernel in a
+  subprocess that is forcefully terminated (SIGTERM then SIGKILL) on expiry
 
 Only ``np`` (numpy) and ``ak`` (awkward-array) are available as named packages.
+The subprocess boundary also prevents any side-effects (file I/O, etc.) from
+escaping to the parent server process.
 """
 
 from __future__ import annotations
 
-import math
-import threading
+import marshal
+import multiprocessing
 import types
 from typing import Any
 
@@ -189,13 +192,54 @@ def compile_kernel(code: str) -> types.CodeType:
     return code_obj
 
 
+def _kernel_worker(
+    code_bytes: bytes,
+    branches_data: dict[str, Any],
+    conn: Any,
+) -> None:
+    """Worker function executed in a subprocess to run the kernel.
+
+    Compiles and runs the kernel code, then sends the result (or an error
+    description) through *conn* (a :class:`multiprocessing.Connection`).
+    The calling process reads back ``("ok", result)``,
+    ``("def_error", message)``, ``("missing", None)``, or
+    ``("run_error", message)``.
+    """
+    code_obj = marshal.loads(code_bytes)
+    globs = _make_safe_globals()
+
+    try:
+        exec(code_obj, globs)  # noqa: S102 — intentional restricted exec
+    except Exception as exc:
+        conn.send(("def_error", str(exc)))
+        conn.close()
+        return
+
+    if "kernel" not in globs or not callable(globs["kernel"]):
+        conn.send(("missing", None))
+        conn.close()
+        return
+
+    try:
+        result = globs["kernel"](branches_data)
+        conn.send(("ok", result))
+    except Exception as exc:  # noqa: BLE001
+        conn.send(("run_error", str(exc)))
+    conn.close()
+
+
 def execute_kernel(
     code_obj: types.CodeType,
     branches_data: dict[str, Any],
     *,
     timeout: float = 30.0,
 ) -> Any:
-    """Execute a compiled kernel in a restricted sandbox.
+    """Execute a compiled kernel in a restricted subprocess.
+
+    The kernel runs in a separate :class:`multiprocessing.Process`.  If it
+    does not complete within *timeout* seconds the process is first sent
+    ``SIGTERM`` and then ``SIGKILL``, guaranteeing that runaway kernels
+    cannot consume CPU indefinitely.
 
     Parameters
     ----------
@@ -218,37 +262,40 @@ def execute_kernel(
         If the kernel definition fails, no callable named ``kernel`` is found,
         execution raises an exception, or the timeout is exceeded.
     """
-    globs = _make_safe_globals()
+    code_bytes = marshal.dumps(code_obj)
+    parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+
+    proc = multiprocessing.Process(
+        target=_kernel_worker,
+        args=(code_bytes, branches_data, child_conn),
+        daemon=True,
+    )
+    proc.start()
+    child_conn.close()  # Parent only reads; close the write end here.
+
+    if not parent_conn.poll(timeout):
+        # Timeout: forcefully terminate the subprocess.
+        proc.terminate()
+        proc.join(2.0)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(1.0)
+        raise KernelError(f"Kernel execution timed out after {timeout:.1f} s")
+
+    proc.join()
 
     try:
-        exec(code_obj, globs)  # noqa: S102 — intentional restricted exec
-    except Exception as exc:
-        raise KernelError(f"Kernel definition failed: {exc}") from exc
-
-    if "kernel" not in globs or not callable(globs["kernel"]):
-        raise KernelError("Kernel code must define a callable named 'kernel'")
-
-    kernel_fn = globs["kernel"]
-    result_holder: list[Any] = []
-    exc_holder: list[BaseException] = []
-
-    def _run() -> None:
-        try:
-            result_holder.append(kernel_fn(branches_data))
-        except Exception as exc:  # noqa: BLE001
-            exc_holder.append(exc)
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout)
-
-    if thread.is_alive():
-        raise KernelError(f"Kernel execution timed out after {timeout:.1f} s")
-    if exc_holder:
+        status, payload = parent_conn.recv()
+    except EOFError as exc:
         raise KernelError(
-            f"Kernel raised an exception: {exc_holder[0]}"
-        ) from exc_holder[0]
-    if not result_holder:
-        raise KernelError("Kernel did not return a result")
+            f"Kernel process exited unexpectedly (exit code: {proc.exitcode})"
+        ) from exc
 
-    return result_holder[0]
+    if status == "ok":
+        return payload
+    if status == "def_error":
+        raise KernelError(f"Kernel definition failed: {payload}")
+    if status == "missing":
+        raise KernelError("Kernel code must define a callable named 'kernel'")
+    # status == "run_error"
+    raise KernelError(f"Kernel raised an exception: {payload}")

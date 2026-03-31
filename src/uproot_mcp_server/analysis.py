@@ -423,14 +423,43 @@ def histogram_branch(
 # ---------------------------------------------------------------------------
 
 
+def _normalize_json(v: Any) -> Any:
+    """Recursively convert *v* to a JSON-serialisable Python type.
+
+    Handles ``numpy`` scalars and arrays, ``awkward`` arrays, non-finite floats
+    (mapped to ``None``), and nested ``dict`` / ``list`` / ``tuple`` containers.
+    """
+    if isinstance(v, dict):
+        return {k: _normalize_json(val) for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_normalize_json(item) for item in v]
+    if isinstance(v, np.generic):
+        val = v.item()
+        if isinstance(val, float) and not math.isfinite(val):
+            return None
+        return val
+    if isinstance(v, np.ndarray):
+        return _normalize_json(v.tolist())
+    if isinstance(v, ak.Array):
+        return _normalize_json(ak.to_list(v))
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
+
+
 def _paginate(
-    data: list[Any],
+    data: Any,
     page: int,
     page_size: int,
     result_type: str,
     meta: dict[str, Any],
 ) -> KernelResult:
-    """Slice *data* to the requested page and return a paginated result dict."""
+    """Slice *data* to the requested page and return a paginated result dict.
+
+    *data* may be an ``ak.Array``, ``np.ndarray``, ``list``, or ``tuple``.
+    Only the requested page slice is materialised to a Python list, avoiding
+    the overhead of converting the entire result before slicing.
+    """
     total = len(data)
     page_count = max(1, math.ceil(total / page_size))
 
@@ -442,10 +471,18 @@ def _paginate(
 
     start = page * page_size
     end = start + page_size
+    page_slice = data[start:end]
+
+    if isinstance(page_slice, ak.Array):
+        page_data: list[Any] = ak.to_list(page_slice)
+    elif isinstance(page_slice, np.ndarray):
+        page_data = page_slice.tolist()
+    else:
+        page_data = list(page_slice)
 
     return {
         "result_type": result_type,
-        "data": data[start:end],
+        "data": page_data,
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -529,13 +566,12 @@ def run_kernel(
         if entry_stop is not None:
             read_kwargs["entry_stop"] = entry_stop
 
+        arrays_kwargs: dict[str, Any] = dict(read_kwargs)
         if cut:
-            arrays_ak = tree.arrays(branches, cut=cut, library="ak", **read_kwargs)
-            branches_data: dict[str, Any] = {b: arrays_ak[b] for b in branches}
-        else:
-            branches_data = {
-                b: tree[b].array(library="ak", **read_kwargs) for b in branches
-            }
+            arrays_kwargs["cut"] = cut
+
+        arrays_ak = tree.arrays(branches, library="ak", **arrays_kwargs)
+        branches_data: dict[str, Any] = {b: arrays_ak[b] for b in branches}
 
     result = _execute_kernel(code_obj, branches_data)
 
@@ -551,13 +587,13 @@ def run_kernel(
     }
 
     if isinstance(result, ak.Array):
-        return _paginate(ak.to_list(result), page, page_size, "array", meta)
+        return _paginate(result, page, page_size, "array", meta)
     if isinstance(result, np.ndarray):
-        return _paginate(result.ravel().tolist(), page, page_size, "array", meta)
+        return _paginate(result.ravel(), page, page_size, "array", meta)
     if isinstance(result, (list, tuple)):
-        return _paginate(list(result), page, page_size, "array", meta)
+        return _paginate(result, page, page_size, "array", meta)
     if isinstance(result, dict):
-        return {"result_type": "dict", "data": result, **meta}
+        return {"result_type": "dict", "data": _normalize_json(result), **meta}
     # Scalar: convert numpy scalars to plain Python types
-    scalar: Any = result.item() if isinstance(result, np.generic) else result
+    scalar: Any = _normalize_json(result)
     return {"result_type": "scalar", "data": scalar, **meta}

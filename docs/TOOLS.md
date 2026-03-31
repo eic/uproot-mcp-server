@@ -230,7 +230,7 @@ The following are **blocked**:
 | `exec`, `eval`, `open`, `compile` | Not present in restricted builtins |
 | Dunder attribute access (`obj.__class__`, etc.) | Rejected at AST compile time |
 | Writes to `np` / `ak` modules | `_write_` guard raises `AttributeError` |
-| Infinite loops / long-running code | 30-second wall-clock timeout |
+| Infinite loops / long-running code | 30-second wall-clock timeout; subprocess is forcefully terminated (SIGTERM then SIGKILL) |
 
 Available inside kernels: `np` (numpy), `ak` (awkward-array), and a safe subset of
 built-ins: `len`, `range`, `list`, `dict`, `tuple`, `set`, `int`, `float`, `bool`, `str`,
