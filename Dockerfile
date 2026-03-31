@@ -3,25 +3,15 @@
 # ---- Build stage ----
 FROM python:3.12-slim AS builder
 
-# Install build dependencies needed to compile xrootd from source on non-x86_64
-# (pre-built manylinux wheels are only available for x86_64)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    cmake \
-    make \
-    gcc \
-    g++ \
-    libssl-dev \
-    uuid-dev \
-    zlib1g-dev && \
-    rm -rf /var/lib/apt/lists/*
-
 WORKDIR /build
 
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
-RUN pip install --no-cache-dir ".[xrootd]" && \
+# Install base package, then xrootd only if a binary wheel is available.
+# xrootd does not publish aarch64 wheels, so building from source is avoided.
+RUN pip install --no-cache-dir "." && \
+    pip install --no-cache-dir --only-binary=xrootd "xrootd>=5.4.0" || true && \
     pip cache purge
 
 # ---- Runtime stage ----
