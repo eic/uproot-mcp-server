@@ -49,6 +49,17 @@ class TestServerGetFileStructure:
         assert "error" in result
         assert isinstance(result["error"], str)
 
+    def test_elapsed_s(self):
+        result = server.get_file_structure(LOCAL_FILE)
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
+    def test_error_response_has_no_elapsed_s(self):
+        result = server.get_file_structure("/no/such/file.root")
+        assert "error" in result
+        assert "elapsed_s" not in result
+
 
 # ---------------------------------------------------------------------------
 # get_tree_info
@@ -96,6 +107,12 @@ class TestServerGetBranchStatistics:
         result = server.get_branch_statistics(LOCAL_FILE, "events", "no_branch")
         assert "error" in result
 
+    def test_elapsed_s(self):
+        result = server.get_branch_statistics(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
     def test_no_inf_or_nan_in_output(self):
         result = server.get_branch_statistics(LOCAL_FILE, "events", "px")
         json_str = json.dumps(result)
@@ -142,11 +159,55 @@ class TestServerHistogramBranch:
         total = sum(result["counts"]) + result["underflow"] + result["overflow"]
         assert total == result["entries"]
 
+    def test_elapsed_s(self):
+        result = server.histogram_branch(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
     def test_no_inf_or_nan_in_output(self):
         result = server.histogram_branch(LOCAL_FILE, "events", "px", bins=100)
         json_str = json.dumps(result)
         assert "Infinity" not in json_str
         assert "NaN" not in json_str
+
+
+# ---------------------------------------------------------------------------
+# execute_kernel
+# ---------------------------------------------------------------------------
+
+
+class TestServerExecuteKernel:
+    _SCALAR_CODE = "def kernel(events): return float(np.mean(events['px']))"
+    _ARRAY_CODE = "def kernel(events): return events['px']"
+
+    def test_returns_json_serialisable(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert _is_json_serialisable(result)
+
+    def test_scalar_result(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert "error" not in result
+        assert result["result_type"] == "scalar"
+
+    def test_elapsed_s_present(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
+    def test_kernel_elapsed_s_present(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert "kernel_elapsed_s" in result
+        assert isinstance(result["kernel_elapsed_s"], float)
+        assert result["elapsed_s"] >= result["kernel_elapsed_s"] >= 0.0
+
+    def test_error_response_has_no_elapsed_s(self):
+        result = server.execute_kernel(
+            LOCAL_FILE, "events", self._SCALAR_CODE, ["no_such_branch"]
+        )
+        assert "error" in result
+        assert "elapsed_s" not in result
 
 
 # ---------------------------------------------------------------------------
