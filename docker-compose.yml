@@ -1,0 +1,43 @@
+services:
+  uproot-mcp-server:
+    image: ghcr.io/eic/uproot-mcp-server:latest
+    container_name: uproot-mcp-server
+    stdin_open: true
+    tty: true
+
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import uproot_mcp_server"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+    # Restart policy
+    restart: unless-stopped
+
+  # Watchtower automatically pulls and restarts the uproot-mcp-server container
+  # whenever a new image is published to ghcr.io.
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    container_name: uproot-mcp-server-watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Only watch the uproot-mcp-server container (not watchtower itself)
+    command: uproot-mcp-server
+    environment:
+      # Check for updates every hour (3600 seconds). Override via env var.
+      WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-3600}
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+    restart: unless-stopped

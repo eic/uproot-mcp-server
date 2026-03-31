@@ -20,6 +20,32 @@ integration.
 
 ## Installation
 
+### Using Docker (Recommended)
+
+Pull and run the latest image published to the GitHub Container Registry:
+
+```bash
+docker run -i --rm \
+  ghcr.io/eic/uproot-mcp-server:latest
+```
+
+### Using Docker Compose with Watchtower
+
+The bundled `docker-compose.yml` starts the MCP server alongside
+[Watchtower](https://containrrr.dev/watchtower/), which automatically pulls
+and restarts the container whenever a new image is published to `ghcr.io`:
+
+```bash
+docker compose up -d
+```
+
+Watchtower polls for updates every hour by default.  Override the interval (in
+seconds) with the `WATCHTOWER_POLL_INTERVAL` environment variable:
+
+```bash
+WATCHTOWER_POLL_INTERVAL=1800 docker compose up -d
+```
+
 ### From source
 
 ```bash
@@ -56,6 +82,8 @@ uproot-mcp-server
 
 ### MCP client configuration
 
+#### Local installation
+
 Add to your MCP client configuration file (e.g. Claude Desktop):
 
 ```json
@@ -63,6 +91,19 @@ Add to your MCP client configuration file (e.g. Claude Desktop):
   "mcpServers": {
     "uproot": {
       "command": "uproot-mcp-server"
+    }
+  }
+}
+```
+
+#### Docker
+
+```json
+{
+  "mcpServers": {
+    "uproot": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "ghcr.io/eic/uproot-mcp-server:latest"]
     }
   }
 }
