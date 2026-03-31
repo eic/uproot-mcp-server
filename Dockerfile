@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Build stage ----
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /build
 
@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir "." && \
     pip cache purge
 
 # ---- Runtime stage ----
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Install runtime dependencies
 RUN apt-get update && \
@@ -25,7 +25,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy installed Python packages and entrypoint from builder
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
 COPY --from=builder /usr/local/bin/uproot-mcp-server /usr/local/bin/uproot-mcp-server
 
 # Use non-root user for security
