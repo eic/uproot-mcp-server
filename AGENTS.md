@@ -260,9 +260,9 @@ root://dtn-eic.jlab.org//work/eic2/EPIC/RECO/{campaign}/
    - A variable-length (jagged) branch was passed directly to numpy
    - Use `_flatten_to_float()` which handles awkward arrays
 
-3. **`KeyError: 'tree_name'` on uproot open**
-   - Tree name may include a cycle suffix (e.g. `"events;1"`)
-   - Use `get_file_structure` first to discover the correct key names
+3. **`KeyError` when accessing tree by name (e.g. `f[tree_name]`)**
+   - uproot raises `KeyError` with the missing object key (e.g. `"events"` or `"events;1"`) when indexing the file/tree
+   - Use `get_file_structure` first to discover the correct tree/key names before accessing them
 
 4. **Remote file hangs / times out**
    - XRootD must be installed: `pip install -e ".[xrootd]"`
