@@ -875,3 +875,319 @@ def validate_dataset_schema(
         "failed_files": failed_files,
         "elapsed_s": round(time.perf_counter() - t0, 6),
     }
+# ---------------------------------------------------------------------------
+
+
+def _process_file_for_histogram(
+    args: tuple[str, str, str, np.ndarray, str | None, int | None],
+) -> tuple[np.ndarray, int, int, int, str | None]:
+    """Open one file and accumulate histogram counts into the provided edges.
+
+    Returns ``(counts, underflow, overflow, n_entries, error_msg)``.
+    ``error_msg`` is ``None`` on success.
+    """
+    file_path, tree_name, branch_name, edges, cut, entries_per_file = args
+    bins = len(edges) - 1
+    range_min = float(edges[0])
+    range_max = float(edges[-1])
+    try:
+        with _open_file(file_path) as f:
+            tree = f[tree_name]
+            read_kwargs: dict[str, Any] = {}
+            if entries_per_file is not None:
+                read_kwargs["entry_stop"] = entries_per_file
+            if cut:
+                arrays = tree.arrays([branch_name], cut=cut, library="ak", **read_kwargs)
+                data_raw: Any = arrays[branch_name]
+            else:
+                data_raw = tree[branch_name].array(library="ak", **read_kwargs)
+        flat = _flatten_to_float(data_raw)
+        finite = flat[np.isfinite(flat)]
+        counts, _ = np.histogram(finite, bins=edges)
+        underflow = int(np.sum(finite < range_min))
+        overflow = int(np.sum(finite > range_max))
+        return counts, underflow, overflow, int(len(finite)), None
+    except Exception as exc:
+        return np.zeros(bins, dtype=np.int64), 0, 0, 0, str(exc)
+
+
+def histogram_dataset(
+    file_paths: list[str],
+    tree_name: str,
+    branch_name: str,
+    *,
+    bins: int = 100,
+    range_min: float,
+    range_max: float,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+) -> HistogramResult:
+    """Accumulate a 1-D histogram across many ROOT files.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    branch_name:
+        Branch to histogram.
+    bins:
+        Number of histogram bins (default 100, must be >= 1).
+    range_min:
+        Lower edge of the histogram range (required).
+    range_max:
+        Upper edge of the histogram range (required).
+    cut:
+        Optional boolean selection expression applied per entry.
+    entries_per_file:
+        If set, read at most this many entries per file (for prototyping).
+    workers:
+        Number of threads for parallel file I/O (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``edges``: list of ``bins + 1`` bin-edge values
+    - ``counts``: list of accumulated bin counts
+    - ``underflow``, ``overflow``: entries outside the histogram range
+    - ``entries``: total finite entries histogrammed
+    - ``mean``, ``std``: weighted statistics from bin centres (``None`` if empty)
+    - ``range_min``, ``range_max``, ``bins``
+    - ``file_paths``, ``tree_name``, ``branch_name``, ``cut``
+    - ``n_files``, ``n_files_ok``, ``n_files_failed``
+    - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
+    - ``elapsed_s``: total wall time in seconds
+    """
+    if bins < 1:
+        raise ValueError(f"bins must be >= 1, got {bins}")
+    if range_min >= range_max:
+        raise ValueError(
+            f"range_min must be < range_max, got {range_min} >= {range_max}"
+        )
+
+    t0 = time.perf_counter()
+    edges = np.linspace(range_min, range_max, bins + 1)
+    total_counts = np.zeros(bins, dtype=np.int64)
+    total_underflow = 0
+    total_overflow = 0
+    total_entries = 0
+    failed_files: list[dict[str, str]] = []
+
+    task_args = [
+        (fp, tree_name, branch_name, edges, cut, entries_per_file)
+        for fp in file_paths
+    ]
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for fp, result in zip(
+            file_paths,
+            executor.map(_process_file_for_histogram, task_args),
+        ):
+            counts, underflow, overflow, n_entries, error = result
+            if error is not None:
+                failed_files.append({"file": fp, "error": error})
+            else:
+                total_counts += counts
+                total_underflow += underflow
+                total_overflow += overflow
+                total_entries += n_entries
+
+    n_files_ok = len(file_paths) - len(failed_files)
+
+    # Compute mean/std from bin centres weighted by counts
+    mean_val: float | None = None
+    std_val: float | None = None
+    if total_entries > 0:
+        centres = 0.5 * (edges[:-1] + edges[1:])
+        w = total_counts.astype(float)
+        weight_sum = float(w.sum())
+        if weight_sum > 0.0:
+            mean_val = float(np.average(centres, weights=w))
+            variance = float(np.average((centres - mean_val) ** 2, weights=w))
+            std_val = float(math.sqrt(variance)) if variance >= 0 else 0.0
+
+    elapsed_s = time.perf_counter() - t0
+
+    return {
+        "edges": edges.tolist(),
+        "counts": total_counts.tolist(),
+        "underflow": total_underflow,
+        "overflow": total_overflow,
+        "entries": total_entries,
+        "mean": mean_val,
+        "std": std_val,
+        "range_min": float(range_min),
+        "range_max": float(range_max),
+        "bins": bins,
+        "file_paths": list(file_paths),
+        "tree_name": tree_name,
+        "branch_name": branch_name,
+        "cut": cut,
+        "n_files": len(file_paths),
+        "n_files_ok": n_files_ok,
+        "n_files_failed": len(failed_files),
+        "failed_files": failed_files,
+        "elapsed_s": elapsed_s,
+    }
+
+
+def _process_file_for_statistics(
+    args: tuple[str, str, str, str | None, int | None],
+) -> tuple[int, float, float, float, float, int, int, str | None]:
+    """Open one file and compute partial Welford statistics.
+
+    Returns ``(count, mean, M2, global_min, global_max, num_nan, num_inf, error)``.
+    """
+    file_path, tree_name, branch_name, cut, entries_per_file = args
+    try:
+        with _open_file(file_path) as f:
+            tree = f[tree_name]
+            read_kwargs: dict[str, Any] = {}
+            if entries_per_file is not None:
+                read_kwargs["entry_stop"] = entries_per_file
+            if cut:
+                arrays = tree.arrays([branch_name], cut=cut, library="ak", **read_kwargs)
+                data_raw: Any = arrays[branch_name]
+            else:
+                data_raw = tree[branch_name].array(library="ak", **read_kwargs)
+        flat = _flatten_to_float(data_raw)
+        num_nan = int(np.sum(np.isnan(flat)))
+        num_inf = int(np.sum(np.isinf(flat)))
+        finite = flat[np.isfinite(flat)]
+        n = len(finite)
+        if n == 0:
+            return 0, 0.0, 0.0, math.inf, -math.inf, num_nan, num_inf, None
+        mean_b = float(np.mean(finite))
+        m2_b = float(np.sum((finite - mean_b) ** 2))
+        gmin = float(np.min(finite))
+        gmax = float(np.max(finite))
+        return n, mean_b, m2_b, gmin, gmax, num_nan, num_inf, None
+    except Exception as exc:
+        return 0, 0.0, 0.0, math.inf, -math.inf, 0, 0, str(exc)
+
+
+def get_dataset_statistics(
+    file_paths: list[str],
+    tree_name: str,
+    branch_name: str,
+    *,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+) -> BranchStatistics:
+    """Compute mean/std/min/max across many ROOT files using Welford's algorithm.
+
+    Percentiles (p25, p50, p75) cannot be computed in streaming fashion and are
+    returned as ``None``.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    branch_name:
+        Branch to compute statistics for.
+    cut:
+        Optional boolean selection expression applied per entry.
+    entries_per_file:
+        If set, read at most this many entries per file (for prototyping).
+    workers:
+        Number of threads for parallel file I/O (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``count``, ``mean``, ``std``, ``min``, ``max``
+    - ``p25``, ``p50``, ``p75``: always ``None`` (not computable in streaming mode)
+    - ``num_nan``, ``num_inf``
+    - ``file_paths``, ``tree_name``, ``branch_name``, ``cut``
+    - ``n_files``, ``n_files_ok``, ``n_files_failed``
+    - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
+    - ``elapsed_s``: total wall time in seconds
+    """
+    t0 = time.perf_counter()
+
+    task_args = [
+        (fp, tree_name, branch_name, cut, entries_per_file)
+        for fp in file_paths
+    ]
+
+    # Welford combiner state
+    count = 0
+    mean = 0.0
+    m2 = 0.0
+    global_min = math.inf
+    global_max = -math.inf
+    total_nan = 0
+    total_inf = 0
+    failed_files: list[dict[str, str]] = []
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for fp, partial in zip(
+            file_paths,
+            executor.map(_process_file_for_statistics, task_args),
+        ):
+            n_b, mean_b, m2_b, gmin_b, gmax_b, num_nan_b, num_inf_b, error = partial
+            if error is not None:
+                failed_files.append({"file": fp, "error": error})
+                continue
+            total_nan += num_nan_b
+            total_inf += num_inf_b
+            if n_b == 0:
+                continue
+            # Parallel Welford combination
+            n_a = count
+            combined_n = n_a + n_b
+            if n_a == 0:
+                mean = mean_b
+                m2 = m2_b
+            else:
+                delta = mean_b - mean
+                mean = (n_a * mean + n_b * mean_b) / combined_n
+                m2 = m2 + m2_b + delta ** 2 * n_a * n_b / combined_n
+            count = combined_n
+            global_min = min(global_min, gmin_b)
+            global_max = max(global_max, gmax_b)
+
+    n_files_ok = len(file_paths) - len(failed_files)
+
+    if count == 0:
+        std_val: float | None = None
+        mean_val: float | None = None
+        min_val: float | None = None
+        max_val: float | None = None
+    else:
+        mean_val = mean if math.isfinite(mean) else None
+        std_raw = math.sqrt(m2 / count) if count > 1 else 0.0
+        std_val = std_raw if math.isfinite(std_raw) else None
+        min_val = global_min if math.isfinite(global_min) else None
+        max_val = global_max if math.isfinite(global_max) else None
+
+    elapsed_s = time.perf_counter() - t0
+
+    return {
+        "count": count,
+        "mean": mean_val,
+        "std": std_val,
+        "min": min_val,
+        "max": max_val,
+        "p25": None,
+        "p50": None,
+        "p75": None,
+        "num_nan": total_nan,
+        "num_inf": total_inf,
+        "file_paths": list(file_paths),
+        "tree_name": tree_name,
+        "branch_name": branch_name,
+        "cut": cut,
+        "n_files": len(file_paths),
+        "n_files_ok": n_files_ok,
+        "n_files_failed": len(failed_files),
+        "failed_files": failed_files,
+        "elapsed_s": elapsed_s,
+    }

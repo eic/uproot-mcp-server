@@ -290,3 +290,94 @@ class TestServerValidateDatasetSchema:
         )
         assert result["n_files_failed"] == 1
         assert result["compatible"] is False
+
+
+
+# ---------------------------------------------------------------------------
+# histogram_dataset
+# ---------------------------------------------------------------------------
+
+
+class TestServerHistogramDataset:
+    def test_returns_json_serialisable(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert _is_json_serialisable(result)
+
+    def test_valid_call(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert "error" not in result
+        assert result["entries"] == 1000
+        assert result["n_files_ok"] == 1
+
+    def test_invalid_file_graceful(self):
+        result = server.histogram_dataset(
+            ["/no/such/file.root"], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert _is_json_serialisable(result)
+        assert result["n_files_failed"] == 1
+
+    def test_elapsed_s_present(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert "elapsed_s" in result
+        assert result["elapsed_s"] >= 0.0
+
+    def test_no_nan_in_output(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        json_str = json.dumps(result)
+        assert "NaN" not in json_str
+        assert "Infinity" not in json_str
+
+    def test_bins_validation_returns_error(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", bins=0, range_min=-5.0, range_max=5.0
+        )
+        assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# get_dataset_statistics
+# ---------------------------------------------------------------------------
+
+
+class TestServerGetDatasetStatistics:
+    def test_returns_json_serialisable(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert _is_json_serialisable(result)
+
+    def test_valid_call(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert "error" not in result
+        assert result["count"] == 1000
+        assert result["n_files_ok"] == 1
+
+    def test_percentiles_none(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert result["p25"] is None
+        assert result["p50"] is None
+        assert result["p75"] is None
+
+    def test_invalid_file_graceful(self):
+        result = server.get_dataset_statistics(
+            ["/no/such/file.root"], "events", "px"
+        )
+        assert _is_json_serialisable(result)
+        assert result["n_files_failed"] == 1
+
+    def test_elapsed_s_present(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert "elapsed_s" in result
+        assert result["elapsed_s"] >= 0.0
+
+    def test_no_nan_in_output(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        json_str = json.dumps(result)
+        assert "NaN" not in json_str
+        assert "Infinity" not in json_str
