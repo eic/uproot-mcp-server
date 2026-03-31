@@ -731,9 +731,11 @@ def histogram_dataset(
     if total_entries > 0:
         centres = 0.5 * (edges[:-1] + edges[1:])
         w = total_counts.astype(float)
-        mean_val = float(np.average(centres, weights=w))
-        variance = float(np.average((centres - mean_val) ** 2, weights=w))
-        std_val = float(math.sqrt(variance)) if variance >= 0 else 0.0
+        weight_sum = float(w.sum())
+        if weight_sum > 0.0:
+            mean_val = float(np.average(centres, weights=w))
+            variance = float(np.average((centres - mean_val) ** 2, weights=w))
+            std_val = float(math.sqrt(variance)) if variance >= 0 else 0.0
 
     elapsed_s = time.perf_counter() - t0
 

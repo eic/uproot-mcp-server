@@ -337,8 +337,10 @@ def histogram_dataset(
     """Accumulate a 1-D histogram across many ROOT files.
 
     Streams data from each file independently, accumulating counts into a
-    fixed-range histogram.  Memory usage scales with ``bins``, not with the
-    total number of events.
+    fixed-range histogram.  Peak memory is dominated by the in-memory arrays
+    for the requested branch (scaled by ``workers``), plus the fixed-size
+    histogram state (scaled with ``bins``), rather than the total number of
+    events on disk.
 
     Parameters
     ----------
