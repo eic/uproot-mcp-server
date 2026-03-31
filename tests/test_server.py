@@ -55,6 +55,11 @@ class TestServerGetFileStructure:
         assert isinstance(result["elapsed_s"], float)
         assert result["elapsed_s"] >= 0.0
 
+    def test_error_response_has_no_elapsed_s(self):
+        result = server.get_file_structure("/no/such/file.root")
+        assert "error" in result
+        assert "elapsed_s" not in result
+
 
 # ---------------------------------------------------------------------------
 # get_tree_info
@@ -165,3 +170,41 @@ class TestServerHistogramBranch:
         json_str = json.dumps(result)
         assert "Infinity" not in json_str
         assert "NaN" not in json_str
+
+
+# ---------------------------------------------------------------------------
+# execute_kernel
+# ---------------------------------------------------------------------------
+
+
+class TestServerExecuteKernel:
+    _SCALAR_CODE = "def kernel(events): return float(np.mean(events['px']))"
+    _ARRAY_CODE = "def kernel(events): return events['px']"
+
+    def test_returns_json_serialisable(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert _is_json_serialisable(result)
+
+    def test_scalar_result(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert "error" not in result
+        assert result["result_type"] == "scalar"
+
+    def test_elapsed_s_present(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
+    def test_kernel_elapsed_s_present(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert "kernel_elapsed_s" in result
+        assert isinstance(result["kernel_elapsed_s"], float)
+        assert result["elapsed_s"] >= result["kernel_elapsed_s"] >= 0.0
+
+    def test_error_response_has_no_elapsed_s(self):
+        result = server.execute_kernel(
+            LOCAL_FILE, "events", self._SCALAR_CODE, ["no_such_branch"]
+        )
+        assert "error" in result
+        assert "elapsed_s" not in result

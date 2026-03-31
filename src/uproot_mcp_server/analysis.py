@@ -600,7 +600,6 @@ def run_kernel(
     t2 = time.perf_counter()
 
     kernel_elapsed_s = round(t2 - t1, 6)
-    total_elapsed_s = round(t2 - t0, 6)
 
     meta: dict[str, Any] = {
         "file_path": file_path,
@@ -611,18 +610,21 @@ def run_kernel(
         "entry_stop": entry_stop,
         "page": page,
         "page_size": page_size,
-        "elapsed_s": total_elapsed_s,
         "kernel_elapsed_s": kernel_elapsed_s,
     }
 
     if isinstance(result, ak.Array):
-        return _paginate(result, page, page_size, "array", meta)
-    if isinstance(result, np.ndarray):
-        return _paginate(result.ravel(), page, page_size, "array", meta)
-    if isinstance(result, (list, tuple)):
-        return _paginate(result, page, page_size, "array", meta)
-    if isinstance(result, dict):
-        return {"result_type": "dict", "data": _normalize_json(result), **meta}
-    # Scalar: convert numpy scalars to plain Python types
-    scalar: Any = _normalize_json(result)
-    return {"result_type": "scalar", "data": scalar, **meta}
+        out = _paginate(result, page, page_size, "array", meta)
+    elif isinstance(result, np.ndarray):
+        out = _paginate(result.ravel(), page, page_size, "array", meta)
+    elif isinstance(result, (list, tuple)):
+        out = _paginate(result, page, page_size, "array", meta)
+    elif isinstance(result, dict):
+        out = {"result_type": "dict", "data": _normalize_json(result), **meta}
+    else:
+        # Scalar: convert numpy scalars to plain Python types
+        scalar: Any = _normalize_json(result)
+        out = {"result_type": "scalar", "data": scalar, **meta}
+
+    out["elapsed_s"] = round(time.perf_counter() - t0, 6)
+    return out
