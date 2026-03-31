@@ -31,10 +31,9 @@ jobs:
 
       - name: Prepare documentation site
         run: |
-          # Create _site directory with docs as base
+          # Create _site directory with docs as base (docs/. copies dotfiles too)
           mkdir -p _site
-          cp -r docs/* _site/
-          cp -r docs/.nojekyll _site/
+          cp -r docs/. _site/
 
           # Copy root markdown files that documentation references
           cp README.md _site/
