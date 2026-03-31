@@ -35,7 +35,7 @@ packages = ["src/uproot_mcp_server"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--cov=uproot_mcp_server --cov-report=term-missing --cov-report=xml"
+addopts = "-v"
 
 [tool.coverage.run]
 source = ["uproot_mcp_server"]
