@@ -134,6 +134,12 @@ class TestGetFileStructure:
         with pytest.raises(Exception):
             analysis.get_file_structure("/nonexistent/path/file.root")
 
+    def test_elapsed_s(self):
+        result = analysis.get_file_structure(LOCAL_FILE)
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
     @_remote_only
     def test_remote_file_structure(self):
         result = analysis.get_file_structure(REMOTE_FILE)
@@ -186,6 +192,12 @@ class TestGetTreeInfo:
     def test_raises_on_missing_tree(self):
         with pytest.raises(Exception):
             analysis.get_tree_info(LOCAL_FILE, "no_such_tree")
+
+    def test_elapsed_s(self):
+        result = analysis.get_tree_info(LOCAL_FILE, "events")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
 
     @_remote_only
     def test_remote_tree_info(self):
@@ -268,6 +280,12 @@ class TestGetBranchStatistics:
         # charge is in {-1, 0, 1}
         assert result["min"] >= -1
         assert result["max"] <= 1
+
+    def test_elapsed_s(self):
+        result = analysis.get_branch_statistics(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
 
     @_remote_only
     def test_remote_branch_statistics(self):
@@ -366,6 +384,12 @@ class TestHistogramBranch:
             LOCAL_FILE, "events", "px", bins=50, entry_start=0, entry_stop=500
         )
         assert result["entries"] == 500
+
+    def test_elapsed_s(self):
+        result = analysis.histogram_branch(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
 
     @_remote_only
     def test_remote_histogram(self):
@@ -493,6 +517,353 @@ class TestRunKernel:
         result = analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
         json.dumps(result)  # must not raise
 
+    def test_elapsed_s_and_kernel_elapsed_s(self):
+        code = "def kernel(events):\n    return events['px']\n"
+        result = analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
+        assert "elapsed_s" in result
+        assert "kernel_elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert isinstance(result["kernel_elapsed_s"], float)
+        assert result["elapsed_s"] >= result["kernel_elapsed_s"] >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# TestGetDatasetFileList
+# ---------------------------------------------------------------------------
+
+class TestGetDatasetFileList:
+    def test_returns_dict(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        assert isinstance(result, dict)
+
+    def test_finds_fixture_file(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        assert result["n_files"] >= 1
+        assert any("test_eic.root" in p for p in result["file_paths"])
+
+    def test_missing_tree(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "nonexistent_tree", workers=1
+        )
+        assert result["n_files_missing_tree"] >= 1
+
+    def test_elapsed_s(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        assert "elapsed_s" in result
+        assert result["elapsed_s"] >= 0.0
+
+    def test_result_keys(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        for key in ("path", "tree_name", "file_paths", "n_files",
+                    "n_files_missing_tree", "missing_tree_files",
+                    "n_files_failed", "failed_files", "elapsed_s"):
+            assert key in result
+
+    def test_directory_path(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR), "events", workers=1
+        )
+        assert result["n_files"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# TestValidateDatasetSchema
+# ---------------------------------------------------------------------------
+
+class TestValidateDatasetSchema:
+    def test_valid_schema(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "py", "pz"], workers=1
+        )
+        assert isinstance(result, dict)
+        assert result["n_files"] == 1
+        assert result["n_files_ok"] == 1
+        assert result["compatible"] is True
+        assert result["total_entries"] > 0
+
+    def test_missing_branch(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "nonexistent_branch_xyz"], workers=1
+        )
+        assert result["compatible"] is False
+        assert "nonexistent_branch_xyz" in result["missing_branch_files"]
+
+    def test_bad_tree(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "nonexistent_tree", ["px"], workers=1
+        )
+        assert result["n_files_failed"] == 1
+        assert result["compatible"] is False
+
+    def test_elapsed_s(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px"], workers=1
+        )
+        assert "elapsed_s" in result
+        assert result["elapsed_s"] >= 0.0
+
+    def test_result_keys(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px"], workers=1
+        )
+        for key in ("compatible", "n_files", "n_files_ok", "n_files_failed",
+                    "total_entries", "missing_branch_files", "failed_files",
+                    "elapsed_s"):
+            assert key in result
+
+    def test_json_serialisable(self):
+        import json
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "py"], workers=1
+        )
+        json.dumps(result)  # must not raise
+
+
+
+# ===========================================================================
+# histogram_dataset
+# ===========================================================================
+
+REQUIRED_DATASET_HISTOGRAM_FIELDS = (
+    "edges", "counts", "underflow", "overflow", "entries",
+    "mean", "std", "range_min", "range_max", "bins",
+    "file_paths", "tree_name", "branch_name", "cut",
+    "n_files", "n_files_ok", "n_files_failed", "failed_files", "elapsed_s",
+)
+
+
+class TestHistogramDataset:
+    def test_returns_dict(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert isinstance(result, dict)
+
+    def test_required_fields(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        for field in REQUIRED_DATASET_HISTOGRAM_FIELDS:
+            assert field in result, f"Missing field: {field}"
+
+    def test_edge_count(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", bins=20, range_min=-5.0, range_max=5.0
+        )
+        assert len(result["edges"]) == 21
+
+    def test_count_length(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", bins=20, range_min=-5.0, range_max=5.0
+        )
+        assert len(result["counts"]) == 20
+
+    def test_entries_match_single_file(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", bins=50, range_min=-5.0, range_max=5.0
+        )
+        assert result["entries"] == 1000
+
+    def test_counts_additive_two_copies(self, tmp_path):
+        """histogram_dataset([f, f]) counts == 2 * histogram_branch(f) for same range."""
+        import shutil
+        copy = str(tmp_path / "copy.root")
+        shutil.copy(LOCAL_FILE, copy)
+        single = analysis.histogram_branch(
+            LOCAL_FILE, "events", "px", bins=50, range_min=-5.0, range_max=5.0
+        )
+        double = analysis.histogram_dataset(
+            [LOCAL_FILE, copy], "events", "px", bins=50, range_min=-5.0, range_max=5.0
+        )
+        assert double["entries"] == 2 * single["entries"]
+        for i, (c_d, c_s) in enumerate(zip(double["counts"], single["counts"])):
+            assert c_d == 2 * c_s, f"bin {i}: {c_d} != 2 * {c_s}"
+
+    def test_n_files_ok_all_good(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert result["n_files"] == 1
+        assert result["n_files_ok"] == 1
+        assert result["n_files_failed"] == 0
+        assert result["failed_files"] == []
+
+    def test_failed_file_tracked(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE, "/no/such/file.root"],
+            "events", "px", range_min=-5.0, range_max=5.0,
+        )
+        assert result["n_files"] == 2
+        assert result["n_files_failed"] == 1
+        assert len(result["failed_files"]) == 1
+        assert result["failed_files"][0]["file"] == "/no/such/file.root"
+        assert isinstance(result["failed_files"][0]["error"], str)
+
+    def test_elapsed_s_non_negative(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert result["elapsed_s"] >= 0.0
+
+    def test_range_echoed(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-3.0, range_max=3.0
+        )
+        assert result["range_min"] == pytest.approx(-3.0)
+        assert result["range_max"] == pytest.approx(3.0)
+
+    def test_bins_must_be_positive(self):
+        with pytest.raises(ValueError, match="bins"):
+            analysis.histogram_dataset(
+                [LOCAL_FILE], "events", "px", bins=0, range_min=-5.0, range_max=5.0
+            )
+
+    def test_invalid_range_raises(self):
+        with pytest.raises(ValueError):
+            analysis.histogram_dataset(
+                [LOCAL_FILE], "events", "px", range_min=5.0, range_max=-5.0
+            )
+
+    def test_entries_per_file_limits_count(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px",
+            range_min=-5.0, range_max=5.0, entries_per_file=200,
+        )
+        assert result["entries"] <= 200
+
+    def test_json_serialisable(self):
+        import json
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        json.dumps(result)
+
+    def test_mean_finite_or_none(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert result["mean"] is None or math.isfinite(result["mean"])
+
+    def test_std_non_negative(self):
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert result["std"] is None or result["std"] >= 0.0
+
+    def test_cut_echoed(self):
+        cut = "charge != 0"
+        result = analysis.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0, cut=cut
+        )
+        assert result["cut"] == cut
+
+
+# ===========================================================================
+# get_dataset_statistics
+# ===========================================================================
+
+REQUIRED_DATASET_STATS_FIELDS = (
+    "count", "mean", "std", "min", "max", "p25", "p50", "p75",
+    "num_nan", "num_inf",
+    "file_paths", "tree_name", "branch_name", "cut",
+    "n_files", "n_files_ok", "n_files_failed", "failed_files", "elapsed_s",
+)
+
+
+class TestGetDatasetStatistics:
+    def test_returns_dict(self):
+        result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert isinstance(result, dict)
+
+    def test_required_fields(self):
+        result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        for field in REQUIRED_DATASET_STATS_FIELDS:
+            assert field in result, f"Missing field: {field}"
+
+    def test_count_matches_single_file(self):
+        result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert result["count"] == 1000
+
+    def test_percentiles_are_none(self):
+        result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert result["p25"] is None
+        assert result["p50"] is None
+        assert result["p75"] is None
+
+    def test_mean_matches_single_file(self):
+        single = analysis.get_branch_statistics(LOCAL_FILE, "events", "px")
+        dataset = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert dataset["mean"] == pytest.approx(single["mean"], rel=1e-6)
+
+    def test_std_matches_single_file(self):
+        single = analysis.get_branch_statistics(LOCAL_FILE, "events", "px")
+        dataset = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert dataset["std"] == pytest.approx(single["std"], rel=1e-6)
+
+    def test_two_copies_same_mean_std(self, tmp_path):
+        """Statistics on [f, f] should give same mean/std as on f alone."""
+        import shutil
+        copy = str(tmp_path / "copy.root")
+        shutil.copy(LOCAL_FILE, copy)
+        single = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        double = analysis.get_dataset_statistics([LOCAL_FILE, copy], "events", "px")
+        assert double["count"] == 2 * single["count"]
+        assert double["mean"] == pytest.approx(single["mean"], rel=1e-6)
+        assert double["std"] == pytest.approx(single["std"], rel=1e-6)
+
+    def test_n_files_ok_all_good(self):
+        result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert result["n_files"] == 1
+        assert result["n_files_ok"] == 1
+        assert result["n_files_failed"] == 0
+        assert result["failed_files"] == []
+
+    def test_failed_file_tracked(self):
+        result = analysis.get_dataset_statistics(
+            [LOCAL_FILE, "/no/such/file.root"], "events", "px"
+        )
+        assert result["n_files"] == 2
+        assert result["n_files_failed"] == 1
+        assert len(result["failed_files"]) == 1
+
+    def test_elapsed_s_non_negative(self):
+        result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert result["elapsed_s"] >= 0.0
+
+    def test_std_non_negative(self):
+        result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert result["std"] is None or result["std"] >= 0.0
+
+    def test_entries_per_file_limits_count(self):
+        result = analysis.get_dataset_statistics(
+            [LOCAL_FILE], "events", "px", entries_per_file=200
+        )
+        assert result["count"] <= 200
+
+    def test_cut_echoed(self):
+        cut = "charge != 0"
+        result = analysis.get_dataset_statistics(
+            [LOCAL_FILE], "events", "px", cut=cut
+        )
+        assert result["cut"] == cut
+
+    def test_json_serialisable(self):
+        import json
+        result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        json.dumps(result)
+
+    def test_finite_statistics(self):
+        result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        for key in ("mean", "std", "min", "max"):
+            assert _is_finite_or_none(result[key]), f"{key} not finite: {result[key]}"
 
 # ---------------------------------------------------------------------------
 # run_kernel_dataset

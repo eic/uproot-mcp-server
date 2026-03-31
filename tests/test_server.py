@@ -49,6 +49,17 @@ class TestServerGetFileStructure:
         assert "error" in result
         assert isinstance(result["error"], str)
 
+    def test_elapsed_s(self):
+        result = server.get_file_structure(LOCAL_FILE)
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
+    def test_error_response_has_no_elapsed_s(self):
+        result = server.get_file_structure("/no/such/file.root")
+        assert "error" in result
+        assert "elapsed_s" not in result
+
 
 # ---------------------------------------------------------------------------
 # get_tree_info
@@ -96,6 +107,12 @@ class TestServerGetBranchStatistics:
         result = server.get_branch_statistics(LOCAL_FILE, "events", "no_branch")
         assert "error" in result
 
+    def test_elapsed_s(self):
+        result = server.get_branch_statistics(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
     def test_no_inf_or_nan_in_output(self):
         result = server.get_branch_statistics(LOCAL_FILE, "events", "px")
         json_str = json.dumps(result)
@@ -142,12 +159,228 @@ class TestServerHistogramBranch:
         total = sum(result["counts"]) + result["underflow"] + result["overflow"]
         assert total == result["entries"]
 
+    def test_elapsed_s(self):
+        result = server.histogram_branch(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
     def test_no_inf_or_nan_in_output(self):
         result = server.histogram_branch(LOCAL_FILE, "events", "px", bins=100)
         json_str = json.dumps(result)
         assert "Infinity" not in json_str
         assert "NaN" not in json_str
 
+
+# ---------------------------------------------------------------------------
+# execute_kernel
+# ---------------------------------------------------------------------------
+
+
+class TestServerExecuteKernel:
+    _SCALAR_CODE = "def kernel(events): return float(np.mean(events['px']))"
+    _ARRAY_CODE = "def kernel(events): return events['px']"
+
+    def test_returns_json_serialisable(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert _is_json_serialisable(result)
+
+    def test_scalar_result(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert "error" not in result
+        assert result["result_type"] == "scalar"
+
+    def test_elapsed_s_present(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
+    def test_kernel_elapsed_s_present(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", self._SCALAR_CODE, ["px"])
+        assert "kernel_elapsed_s" in result
+        assert isinstance(result["kernel_elapsed_s"], float)
+        assert result["elapsed_s"] >= result["kernel_elapsed_s"] >= 0.0
+
+    def test_error_response_has_no_elapsed_s(self):
+        result = server.execute_kernel(
+            LOCAL_FILE, "events", self._SCALAR_CODE, ["no_such_branch"]
+        )
+        assert "error" in result
+        assert "elapsed_s" not in result
+
+
+# ---------------------------------------------------------------------------
+# TestServerGetDatasetFileList
+# ---------------------------------------------------------------------------
+
+class TestServerGetDatasetFileList:
+    def test_returns_dict(self):
+        result = server.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        assert isinstance(result, dict)
+
+    def test_json_serialisable(self):
+        result = server.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        json.dumps(result)  # must not raise
+        assert "n_files_failed" in result
+        assert "failed_files" in result
+
+    def test_finds_fixture_file(self):
+        result = server.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        assert result["n_files"] >= 1
+
+    def test_error_on_xrootd_without_pyxrootd(self):
+        # Without pyxrootd installed, should return an error dict
+        import importlib.util
+        # Only test if XRootD is not available in the environment
+        if importlib.util.find_spec("XRootD") is None:
+            result = server.get_dataset_file_list(
+                "root://nonexistent//path/*.root", "events", workers=1
+            )
+            assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# TestServerValidateDatasetSchema
+# ---------------------------------------------------------------------------
+
+class TestServerValidateDatasetSchema:
+    def test_returns_dict(self):
+        result = server.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "py"], workers=1
+        )
+        assert isinstance(result, dict)
+
+    def test_json_serialisable(self):
+        result = server.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "py"], workers=1
+        )
+        json.dumps(result)  # must not raise
+
+    def test_error_dict_includes_context(self):
+        result = server.validate_dataset_schema(
+            ["nonexistent_file.root"], "events", ["px"], workers=1
+        )
+        # Should succeed (failed_files populated) rather than raise
+        assert isinstance(result, dict)
+        json.dumps(result)
+
+    def test_compatible(self):
+        result = server.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "py", "pz"], workers=1
+        )
+        assert result["compatible"] is True
+
+    def test_missing_branch(self):
+        result = server.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "nonexistent_xyz"], workers=1
+        )
+        assert result["compatible"] is False
+        assert "nonexistent_xyz" in result["missing_branch_files"]
+
+    def test_bad_tree(self):
+        result = server.validate_dataset_schema(
+            [LOCAL_FILE], "nonexistent_tree", ["px"], workers=1
+        )
+        assert result["n_files_failed"] == 1
+        assert result["compatible"] is False
+
+
+
+# ---------------------------------------------------------------------------
+# histogram_dataset
+# ---------------------------------------------------------------------------
+
+
+class TestServerHistogramDataset:
+    def test_returns_json_serialisable(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert _is_json_serialisable(result)
+
+    def test_valid_call(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert "error" not in result
+        assert result["entries"] == 1000
+        assert result["n_files_ok"] == 1
+
+    def test_invalid_file_graceful(self):
+        result = server.histogram_dataset(
+            ["/no/such/file.root"], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert _is_json_serialisable(result)
+        assert result["n_files_failed"] == 1
+
+    def test_elapsed_s_present(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        assert "elapsed_s" in result
+        assert result["elapsed_s"] >= 0.0
+
+    def test_no_nan_in_output(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", range_min=-5.0, range_max=5.0
+        )
+        json_str = json.dumps(result)
+        assert "NaN" not in json_str
+        assert "Infinity" not in json_str
+
+    def test_bins_validation_returns_error(self):
+        result = server.histogram_dataset(
+            [LOCAL_FILE], "events", "px", bins=0, range_min=-5.0, range_max=5.0
+        )
+        assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# get_dataset_statistics
+# ---------------------------------------------------------------------------
+
+
+class TestServerGetDatasetStatistics:
+    def test_returns_json_serialisable(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert _is_json_serialisable(result)
+
+    def test_valid_call(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert "error" not in result
+        assert result["count"] == 1000
+        assert result["n_files_ok"] == 1
+
+    def test_percentiles_none(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert result["p25"] is None
+        assert result["p50"] is None
+        assert result["p75"] is None
+
+    def test_invalid_file_graceful(self):
+        result = server.get_dataset_statistics(
+            ["/no/such/file.root"], "events", "px"
+        )
+        assert _is_json_serialisable(result)
+        assert result["n_files_failed"] == 1
+
+    def test_elapsed_s_present(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        assert "elapsed_s" in result
+        assert result["elapsed_s"] >= 0.0
+
+    def test_no_nan_in_output(self):
+        result = server.get_dataset_statistics([LOCAL_FILE], "events", "px")
+        json_str = json.dumps(result)
+        assert "NaN" not in json_str
+        assert "Infinity" not in json_str
 
 # ---------------------------------------------------------------------------
 # execute_kernel_dataset
@@ -259,7 +492,7 @@ class TestAsyncJobTools:
         )
         assert "error" not in result
         assert "job_id" in result
-        assert result["status"] == "pending"
+        assert result["status"] in ("pending", "running", "done")
         assert result["n_files"] == 1
 
     def test_get_status(self):

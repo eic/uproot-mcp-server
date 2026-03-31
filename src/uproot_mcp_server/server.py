@@ -330,6 +330,145 @@ def execute_kernel(
 
 
 @mcp.tool()
+def histogram_dataset(
+    file_paths: list[str],
+    tree_name: str,
+    branch_name: str,
+    range_min: float,
+    range_max: float,
+    bins: int = 100,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+) -> dict[str, Any]:
+    """Accumulate a 1-D histogram across many ROOT files.
+
+    Streams data from each file independently, accumulating counts into a
+    fixed-range histogram.  Peak memory is dominated by the in-memory arrays
+    for the requested branch (scaled by ``workers``), plus the fixed-size
+    histogram state (scaled with ``bins``), rather than the total number of
+    events on disk.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    branch_name:
+        Branch to histogram (e.g. ``"MCParticles.momentum.x"``).
+    range_min:
+        Lower edge of the histogram range (required).
+    range_max:
+        Upper edge of the histogram range (required).
+    bins:
+        Number of histogram bins (default 100, must be >= 1).
+    cut:
+        Optional boolean selection expression applied per entry.
+    entries_per_file:
+        If set, read at most this many entries per file (useful for prototyping).
+    workers:
+        Number of threads for parallel file I/O (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``edges``: list of ``bins + 1`` bin-edge values
+    - ``counts``: list of accumulated bin counts
+    - ``underflow``, ``overflow``: entries outside the histogram range
+    - ``entries``: total finite entries histogrammed
+    - ``mean``, ``std``: weighted statistics from bin centres (``None`` if empty)
+    - ``range_min``, ``range_max``, ``bins``
+    - ``file_paths``, ``tree_name``, ``branch_name``, ``cut``
+    - ``n_files``, ``n_files_ok``, ``n_files_failed``
+    - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
+    - ``elapsed_s``: total wall time in seconds
+    """
+    try:
+        result = analysis.histogram_dataset(
+            file_paths,
+            tree_name,
+            branch_name,
+            bins=bins,
+            range_min=range_min,
+            range_max=range_max,
+            cut=cut,
+            entries_per_file=entries_per_file,
+            workers=workers,
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_paths": file_paths,
+            "tree_name": tree_name,
+            "branch_name": branch_name,
+        }
+
+
+@mcp.tool()
+def get_dataset_statistics(
+    file_paths: list[str],
+    tree_name: str,
+    branch_name: str,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+) -> dict[str, Any]:
+    """Compute mean/std/min/max across many ROOT files using Welford's algorithm.
+
+    Processes files in parallel using a thread pool and combines partial
+    statistics with the parallel Welford algorithm.  Percentiles (p25, p50,
+    p75) are not computable in streaming mode and are returned as ``None``.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    branch_name:
+        Branch to compute statistics for.
+    cut:
+        Optional boolean selection expression applied per entry.
+    entries_per_file:
+        If set, read at most this many entries per file (useful for prototyping).
+    workers:
+        Number of threads for parallel file I/O (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``count``, ``mean``, ``std``, ``min``, ``max``
+    - ``p25``, ``p50``, ``p75``: always ``None`` (streaming mode limitation)
+    - ``num_nan``, ``num_inf``
+    - ``file_paths``, ``tree_name``, ``branch_name``, ``cut``
+    - ``n_files``, ``n_files_ok``, ``n_files_failed``
+    - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
+    - ``elapsed_s``: total wall time in seconds
+    """
+    try:
+        result = analysis.get_dataset_statistics(
+            file_paths,
+            tree_name,
+            branch_name,
+            cut=cut,
+            entries_per_file=entries_per_file,
+            workers=workers,
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_paths": file_paths,
+            "tree_name": tree_name,
+            "branch_name": branch_name,
+        }
+
+
+@mcp.tool()
 def execute_kernel_dataset(
     file_paths: list[str],
     tree_name: str,
@@ -655,6 +794,93 @@ def cancel_job(job_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+@mcp.tool()
+def get_dataset_file_list(
+    path: str,
+    tree_name: str,
+    workers: int = 4,
+) -> dict[str, Any]:
+    """List ROOT files matching a path pattern that contain a given TTree.
+
+    Parameters
+    ----------
+    path:
+        Glob pattern or directory path, e.g. ``"/data/*.root"`` or
+        ``"root://server//dir/*.root"``.
+    tree_name:
+        Name of the TTree that must be present in each file.
+    workers:
+        Number of parallel threads for per-file metadata checks (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``path``: echoed input path
+    - ``tree_name``: echoed tree name
+    - ``file_paths``: sorted list of file paths that contain *tree_name*
+    - ``n_files``: number of matching files
+    - ``n_files_missing_tree``: count of files that exist but lack *tree_name*
+    - ``missing_tree_files``: those file paths
+    - ``n_files_failed``: count of files that could not be opened
+    - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
+    - ``elapsed_s``: wall-clock seconds
+    """
+    try:
+        result = analysis.get_dataset_file_list(path, tree_name, workers=workers)
+        return _json_safe(result)
+    except Exception as exc:
+        return {"error": str(exc), "path": path, "tree_name": tree_name, "workers": workers}
+
+
+@mcp.tool()
+def validate_dataset_schema(
+    file_paths: list[str],
+    tree_name: str,
+    branches: list[str],
+    workers: int = 4,
+) -> dict[str, Any]:
+    """Verify that all files contain the expected TTree and branches.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to check.
+    tree_name:
+        Name of the TTree that must be present in every file.
+    branches:
+        Branch names that must exist in the tree.
+    workers:
+        Number of parallel threads for per-file metadata reads (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``compatible``: ``True`` if every file is readable and has all branches
+    - ``n_files``: total files checked
+    - ``n_files_ok``: files with tree and all requested branches present
+    - ``n_files_failed``: files that could not be opened or lacked the tree
+    - ``total_entries``: sum of ``num_entries`` across all ok files
+    - ``missing_branch_files``: ``{branch_name: [file, ...]}`` for branches
+      absent in at least one file
+    - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
+    - ``elapsed_s``: wall-clock seconds
+    """
+    try:
+        result = analysis.validate_dataset_schema(
+            file_paths, tree_name, branches, workers=workers
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {"error": str(exc), "tree_name": tree_name, "file_paths": file_paths, "branches": branches}
+
+
+# ---------------------------------------------------------------------------
+# Entry point (duplicated header removed above)
+# ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """Run the MCP server using stdio transport."""

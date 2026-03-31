@@ -7,8 +7,10 @@ All public functions return plain Python dicts suitable for JSON serialization.
 
 from __future__ import annotations
 
+import glob as _glob
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import awkward as ak
@@ -25,6 +27,8 @@ BranchStatistics = dict[str, Any]
 HistogramResult = dict[str, Any]
 KernelResult = dict[str, Any]
 TreeInfo = dict[str, Any]
+DatasetFileList = dict[str, Any]
+DatasetSchemaResult = dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +105,9 @@ def get_file_structure(file_path: str) -> FileStructure:
     - ``file_path``: the path as given
     - ``keys``: list of top-level key dicts (name, classname, cycle)
     - ``trees``: list of tree summary dicts for each TTree found at the top level
+    - ``elapsed_s``: wall-clock seconds for the operation
     """
+    t0 = time.perf_counter()
     with _open_file(file_path) as f:
         keys: list[dict[str, Any]] = []
         trees: list[dict[str, Any]] = []
@@ -146,11 +152,13 @@ def get_file_structure(file_path: str) -> FileStructure:
                         }
                     )
 
-        return {
+        result: FileStructure = {
             "file_path": file_path,
             "keys": keys,
             "trees": trees,
         }
+    result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+    return result
 
 
 def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
@@ -163,7 +171,9 @@ def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
     - ``branches``: list of branch dicts (name, typename, num_entries,
       uncompressed_bytes, compressed_bytes, compression_ratio, leaves)
     - ``title``: tree title if available
+    - ``elapsed_s``: wall-clock seconds for the operation
     """
+    t0 = time.perf_counter()
     with _open_file(file_path) as f:
         tree = f[tree_name]
 
@@ -175,7 +185,7 @@ def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
 
         branches = [_branch_info(tree[b]) for b in tree.keys()]
 
-        return {
+        result: TreeInfo = {
             "file_path": file_path,
             "tree_name": tree.name,
             "title": title,
@@ -183,6 +193,8 @@ def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
             "num_branches": len(branches),
             "branches": branches,
         }
+    result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+    return result
 
 
 def get_branch_statistics(
@@ -215,7 +227,9 @@ def get_branch_statistics(
     - ``count``, ``mean``, ``std``, ``min``, ``max``, ``p25``, ``p50``, ``p75``
     - ``num_nan``, ``num_inf``  (counts of non-finite values)
     - metadata: ``file_path``, ``tree_name``, ``branch_name``, ``cut``
+    - ``elapsed_s``: wall-clock seconds for the operation
     """
+    t0 = time.perf_counter()
     with _open_file(file_path) as f:
         tree = f[tree_name]
 
@@ -245,7 +259,7 @@ def get_branch_statistics(
         finite = data[np.isfinite(data)]
 
         if len(finite) == 0:
-            return {
+            result: BranchStatistics = {
                 "file_path": file_path,
                 "tree_name": tree_name,
                 "branch_name": branch_name,
@@ -261,6 +275,8 @@ def get_branch_statistics(
                 "num_nan": num_nan,
                 "num_inf": num_inf,
             }
+            result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+            return result
 
         percentiles = np.percentile(finite, [25, 50, 75])
 
@@ -269,7 +285,7 @@ def get_branch_statistics(
                 return None
             return float(v)
 
-        return {
+        result = {
             "file_path": file_path,
             "tree_name": tree_name,
             "branch_name": branch_name,
@@ -285,6 +301,8 @@ def get_branch_statistics(
             "num_nan": num_nan,
             "num_inf": num_inf,
         }
+        result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+        return result
 
 
 def histogram_branch(
@@ -338,6 +356,7 @@ def histogram_branch(
             f"(got range_min={range_min}, range_max={range_max})"
         )
 
+    t0 = time.perf_counter()
     with _open_file(file_path) as f:
         tree = f[tree_name]
 
@@ -368,7 +387,7 @@ def histogram_branch(
                 edges_arr = np.linspace(range_min, range_max, bins + 1)  # type: ignore[arg-type]
             else:
                 edges_arr = np.linspace(0.0, 1.0, bins + 1)
-            return {
+            result: HistogramResult = {
                 "file_path": file_path,
                 "tree_name": tree_name,
                 "branch_name": branch_name,
@@ -384,6 +403,8 @@ def histogram_branch(
                 "mean": None,
                 "std": None,
             }
+            result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+            return result
 
         if has_min and has_max:
             hist_range = (float(range_min), float(range_max))  # type: ignore[arg-type]
@@ -401,7 +422,7 @@ def histogram_branch(
         mean = float(np.mean(finite))
         std = float(np.std(finite))
 
-        return {
+        result = {
             "file_path": file_path,
             "tree_name": tree_name,
             "branch_name": branch_name,
@@ -417,6 +438,8 @@ def histogram_branch(
             "mean": mean if math.isfinite(mean) else None,
             "std": std if math.isfinite(std) else None,
         }
+    result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +567,8 @@ def run_kernel(
     if page_size < 1:
         raise ValueError(f"page_size must be >= 1, got {page_size}")
 
+    t0 = time.perf_counter()
+
     # Compile first — fast, catches errors before opening the (potentially
     # remote) file.
     from uproot_mcp_server.sandbox import compile_kernel  # noqa: PLC0415
@@ -574,7 +599,11 @@ def run_kernel(
         arrays_ak = tree.arrays(branches, library="ak", **arrays_kwargs)
         branches_data: dict[str, Any] = {b: arrays_ak[b] for b in branches}
 
+    t1 = time.perf_counter()
     result = _execute_kernel(code_obj, branches_data)
+    t2 = time.perf_counter()
+
+    kernel_elapsed_s = round(t2 - t1, 6)
 
     meta: dict[str, Any] = {
         "file_path": file_path,
@@ -585,20 +614,583 @@ def run_kernel(
         "entry_stop": entry_stop,
         "page": page,
         "page_size": page_size,
+        "kernel_elapsed_s": kernel_elapsed_s,
     }
 
     if isinstance(result, ak.Array):
-        return _paginate(result, page, page_size, "array", meta)
-    if isinstance(result, np.ndarray):
-        return _paginate(result.ravel(), page, page_size, "array", meta)
-    if isinstance(result, (list, tuple)):
-        return _paginate(result, page, page_size, "array", meta)
-    if isinstance(result, dict):
-        return {"result_type": "dict", "data": _normalize_json(result), **meta}
-    # Scalar: convert numpy scalars to plain Python types
-    scalar: Any = _normalize_json(result)
-    return {"result_type": "scalar", "data": scalar, **meta}
+        out = _paginate(result, page, page_size, "array", meta)
+    elif isinstance(result, np.ndarray):
+        out = _paginate(result.ravel(), page, page_size, "array", meta)
+    elif isinstance(result, (list, tuple)):
+        out = _paginate(result, page, page_size, "array", meta)
+    elif isinstance(result, dict):
+        out = {"result_type": "dict", "data": _normalize_json(result), **meta}
+    else:
+        # Scalar: convert numpy scalars to plain Python types
+        scalar: Any = _normalize_json(result)
+        out = {"result_type": "scalar", "data": scalar, **meta}
 
+    out["elapsed_s"] = round(time.perf_counter() - t0, 6)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Dataset / multi-file tools
+# ---------------------------------------------------------------------------
+
+
+def _candidate_paths(path: str) -> list[str]:
+    """Expand *path* to a list of candidate file paths.
+
+    Handles three cases:
+
+    - **Local glob** (``/data/*.root``, ``/data/``): use :func:`glob.glob`.
+      If *path* is a directory, ``/*.root`` is appended automatically.
+    - **XRootD glob** (``root://server//dir/*.root``): try
+      ``XRootD.client.FileSystem`` if pyxrootd is available; otherwise
+      raise :class:`RuntimeError` with an installation hint.
+    - **Plain local file**: return a single-element list.
+    """
+    import os
+
+    if path.startswith("root://"):
+        # --- XRootD path ---
+        # Split into "root://hostname/" prefix and the rest of the path.
+        # URL form: root://hostname//absolute/path/pattern
+        second_slashes = path.find("//", len("root://"))
+        if second_slashes == -1:
+            raise RuntimeError(
+                f"Invalid XRootD URL '{path}'; expected format "
+                "'root://host//absolute/path/pattern'."
+            )
+        prefix_end = second_slashes + 2  # past the second //
+        server_part = path[:prefix_end]  # e.g. "root://dtn-eic.jlab.org//"
+        dir_and_pattern = path[prefix_end:]  # e.g. "work/eic2/EPIC/*.root"
+
+        # Separate directory and filename pattern
+        dir_part = dir_and_pattern.rsplit("/", 1)[0]
+        pattern = dir_and_pattern.rsplit("/", 1)[1] if "/" in dir_and_pattern else "*"
+
+        try:
+            from XRootD import client as xrd_client  # type: ignore[import]
+            fs = xrd_client.FileSystem(server_part)
+            status, listing = fs.dirlist("/" + dir_part, flags=xrd_client.flags.DirListFlags.STAT)
+            if not status.ok:
+                raise RuntimeError(f"XRootD dirlist failed: {status.message}")
+            import fnmatch
+            candidates = []
+            for entry in listing:
+                if fnmatch.fnmatch(entry.name, pattern):
+                    candidates.append(f"{server_part}{dir_part}/{entry.name}")
+            return sorted(candidates)
+        except ImportError:
+            raise RuntimeError(
+                "XRootD glob requires pyxrootd installation: "
+                "pip install pyxrootd"
+            )
+
+    # --- Local path ---
+    if os.path.isdir(path):
+        return sorted(_glob.glob(os.path.join(path, "*.root")))
+    expanded = sorted(_glob.glob(path))
+    if expanded:
+        return expanded
+    # Glob pattern with no matches → return empty list rather than bogus path.
+    if _glob.has_magic(path):
+        return []
+    # Treat as a literal file path (may not exist yet, let caller handle)
+    return [path]
+
+
+def get_dataset_file_list(
+    path: str,
+    tree_name: str,
+    *,
+    workers: int = 4,
+) -> DatasetFileList:
+    """List ROOT files matching a path pattern that contain a given TTree.
+
+    Parameters
+    ----------
+    path:
+        Glob pattern or directory path, e.g. ``"/data/*.root"`` or
+        ``"root://server//dir/*.root"``.
+    tree_name:
+        Name of the TTree that must be present in each file.
+    workers:
+        Number of parallel threads for per-file metadata checks.
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``path``: echoed input path
+    - ``tree_name``: echoed tree name
+    - ``file_paths``: sorted list of file paths that contain *tree_name*
+    - ``n_files``: ``len(file_paths)``
+    - ``n_files_missing_tree``: files that exist but lack *tree_name*
+    - ``missing_tree_files``: list of those file paths
+    - ``n_files_failed``: files that could not be opened (errors)
+    - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
+    - ``elapsed_s``: wall-clock seconds
+    """
+    if workers < 1:
+        raise ValueError(f"'workers' must be a positive integer, got {workers!r}")
+    t0 = time.perf_counter()
+    candidates = _candidate_paths(path)
+
+    file_paths: list[str] = []
+    missing_tree_files: list[str] = []
+    failed_files: list[dict[str, str]] = []
+
+    def _check(fp: str) -> tuple[str, str]:
+        """Return (fp, "ok" | "missing" | <error_msg>)."""
+        try:
+            with _open_file(fp) as f:
+                f[tree_name]  # metadata-only open
+            return fp, "ok"
+        except KeyError:
+            return fp, "missing"
+        except Exception as exc:
+            return fp, f"error:{exc}"
+
+    effective_workers = min(workers, len(candidates)) if candidates else 1
+    with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        for fp, status in executor.map(_check, candidates):
+            if status == "ok":
+                file_paths.append(fp)
+            elif status == "missing":
+                missing_tree_files.append(fp)
+            else:
+                # status is "error:<message>"
+                failed_files.append({"file": fp, "error": status[len("error:"):]})
+
+    file_paths.sort()
+    missing_tree_files.sort()
+    failed_files.sort(key=lambda d: d["file"])
+
+    return {
+        "path": path,
+        "tree_name": tree_name,
+        "file_paths": file_paths,
+        "n_files": len(file_paths),
+        "n_files_missing_tree": len(missing_tree_files),
+        "missing_tree_files": missing_tree_files,
+        "n_files_failed": len(failed_files),
+        "failed_files": failed_files,
+        "elapsed_s": round(time.perf_counter() - t0, 6),
+    }
+
+
+def validate_dataset_schema(
+    file_paths: list[str],
+    tree_name: str,
+    branches: list[str],
+    *,
+    workers: int = 4,
+) -> DatasetSchemaResult:
+    """Verify that all files contain the expected TTree and branches.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to check.
+    tree_name:
+        Name of the TTree that must be present in every file.
+    branches:
+        Branch names that must exist in the tree.
+    workers:
+        Number of parallel threads for per-file metadata reads.
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``compatible``: ``True`` if every file is readable and has all branches
+    - ``n_files``: total files checked
+    - ``n_files_ok``: files with tree and all requested branches present
+    - ``n_files_failed``: files that could not be opened or lacked the tree
+    - ``total_entries``: sum of ``num_entries`` across all ok files
+    - ``missing_branch_files``: ``{branch_name: [file, ...]}`` for branches
+      absent in at least one file
+    - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
+    - ``elapsed_s``: wall-clock seconds
+    """
+    if workers < 1:
+        raise ValueError(f"'workers' must be a positive integer, got {workers!r}")
+    t0 = time.perf_counter()
+
+    # Per-file result: (fp, entries | None, missing_branches, error_msg | None)
+    PerFileResult = tuple[str, int | None, list[str], str | None]
+
+    def _check(fp: str) -> PerFileResult:
+        try:
+            with _open_file(fp) as f:
+                tree = f[tree_name]
+                available = set(tree.keys())
+                entries = int(tree.num_entries)
+                missing = [b for b in branches if b not in available]
+                return fp, entries, missing, None
+        except Exception as exc:
+            return fp, None, [], str(exc)
+
+    effective_workers = min(workers, len(file_paths)) if file_paths else 1
+    per_file: list[PerFileResult] = []
+    with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        per_file = list(executor.map(_check, file_paths))
+
+    total_entries = 0
+    n_files_ok = 0
+    n_files_failed = 0
+    failed_files: list[dict[str, str]] = []
+    missing_branch_files: dict[str, list[str]] = {}
+
+    for fp, entries, missing, error in per_file:
+        if error is not None:
+            n_files_failed += 1
+            failed_files.append({"file": fp, "error": error})
+        else:
+            assert entries is not None
+            total_entries += entries
+            if missing:
+                for b in missing:
+                    missing_branch_files.setdefault(b, []).append(fp)
+                # still counts as "processed" but not fully ok
+            else:
+                n_files_ok += 1
+
+    # Sort for determinism
+    for lst in missing_branch_files.values():
+        lst.sort()
+
+    compatible = n_files_failed == 0 and len(missing_branch_files) == 0
+
+    return {
+        "compatible": compatible,
+        "n_files": len(file_paths),
+        "n_files_ok": n_files_ok,
+        "n_files_failed": n_files_failed,
+        "total_entries": total_entries,
+        "missing_branch_files": missing_branch_files,
+        "failed_files": failed_files,
+        "elapsed_s": round(time.perf_counter() - t0, 6),
+    }
+# ---------------------------------------------------------------------------
+
+
+def _process_file_for_histogram(
+    args: tuple[str, str, str, np.ndarray, str | None, int | None],
+) -> tuple[np.ndarray, int, int, int, str | None]:
+    """Open one file and accumulate histogram counts into the provided edges.
+
+    Returns ``(counts, underflow, overflow, n_entries, error_msg)``.
+    ``error_msg`` is ``None`` on success.
+    """
+    file_path, tree_name, branch_name, edges, cut, entries_per_file = args
+    bins = len(edges) - 1
+    range_min = float(edges[0])
+    range_max = float(edges[-1])
+    try:
+        with _open_file(file_path) as f:
+            tree = f[tree_name]
+            read_kwargs: dict[str, Any] = {}
+            if entries_per_file is not None:
+                read_kwargs["entry_stop"] = entries_per_file
+            if cut:
+                arrays = tree.arrays([branch_name], cut=cut, library="ak", **read_kwargs)
+                data_raw: Any = arrays[branch_name]
+            else:
+                data_raw = tree[branch_name].array(library="ak", **read_kwargs)
+        flat = _flatten_to_float(data_raw)
+        finite = flat[np.isfinite(flat)]
+        counts, _ = np.histogram(finite, bins=edges)
+        underflow = int(np.sum(finite < range_min))
+        overflow = int(np.sum(finite > range_max))
+        return counts, underflow, overflow, int(len(finite)), None
+    except Exception as exc:
+        return np.zeros(bins, dtype=np.int64), 0, 0, 0, str(exc)
+
+
+def histogram_dataset(
+    file_paths: list[str],
+    tree_name: str,
+    branch_name: str,
+    *,
+    bins: int = 100,
+    range_min: float,
+    range_max: float,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+) -> HistogramResult:
+    """Accumulate a 1-D histogram across many ROOT files.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    branch_name:
+        Branch to histogram.
+    bins:
+        Number of histogram bins (default 100, must be >= 1).
+    range_min:
+        Lower edge of the histogram range (required).
+    range_max:
+        Upper edge of the histogram range (required).
+    cut:
+        Optional boolean selection expression applied per entry.
+    entries_per_file:
+        If set, read at most this many entries per file (for prototyping).
+    workers:
+        Number of threads for parallel file I/O (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``edges``: list of ``bins + 1`` bin-edge values
+    - ``counts``: list of accumulated bin counts
+    - ``underflow``, ``overflow``: entries outside the histogram range
+    - ``entries``: total finite entries histogrammed
+    - ``mean``, ``std``: weighted statistics from bin centres (``None`` if empty)
+    - ``range_min``, ``range_max``, ``bins``
+    - ``file_paths``, ``tree_name``, ``branch_name``, ``cut``
+    - ``n_files``, ``n_files_ok``, ``n_files_failed``
+    - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
+    - ``elapsed_s``: total wall time in seconds
+    """
+    if bins < 1:
+        raise ValueError(f"bins must be >= 1, got {bins}")
+    if range_min >= range_max:
+        raise ValueError(
+            f"range_min must be < range_max, got {range_min} >= {range_max}"
+        )
+
+    t0 = time.perf_counter()
+    edges = np.linspace(range_min, range_max, bins + 1)
+    total_counts = np.zeros(bins, dtype=np.int64)
+    total_underflow = 0
+    total_overflow = 0
+    total_entries = 0
+    failed_files: list[dict[str, str]] = []
+
+    task_args = [
+        (fp, tree_name, branch_name, edges, cut, entries_per_file)
+        for fp in file_paths
+    ]
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for fp, result in zip(
+            file_paths,
+            executor.map(_process_file_for_histogram, task_args),
+        ):
+            counts, underflow, overflow, n_entries, error = result
+            if error is not None:
+                failed_files.append({"file": fp, "error": error})
+            else:
+                total_counts += counts
+                total_underflow += underflow
+                total_overflow += overflow
+                total_entries += n_entries
+
+    n_files_ok = len(file_paths) - len(failed_files)
+
+    # Compute mean/std from bin centres weighted by counts
+    mean_val: float | None = None
+    std_val: float | None = None
+    if total_entries > 0:
+        centres = 0.5 * (edges[:-1] + edges[1:])
+        w = total_counts.astype(float)
+        weight_sum = float(w.sum())
+        if weight_sum > 0.0:
+            mean_val = float(np.average(centres, weights=w))
+            variance = float(np.average((centres - mean_val) ** 2, weights=w))
+            std_val = float(math.sqrt(variance)) if variance >= 0 else 0.0
+
+    elapsed_s = time.perf_counter() - t0
+
+    return {
+        "edges": edges.tolist(),
+        "counts": total_counts.tolist(),
+        "underflow": total_underflow,
+        "overflow": total_overflow,
+        "entries": total_entries,
+        "mean": mean_val,
+        "std": std_val,
+        "range_min": float(range_min),
+        "range_max": float(range_max),
+        "bins": bins,
+        "file_paths": list(file_paths),
+        "tree_name": tree_name,
+        "branch_name": branch_name,
+        "cut": cut,
+        "n_files": len(file_paths),
+        "n_files_ok": n_files_ok,
+        "n_files_failed": len(failed_files),
+        "failed_files": failed_files,
+        "elapsed_s": elapsed_s,
+    }
+
+
+def _process_file_for_statistics(
+    args: tuple[str, str, str, str | None, int | None],
+) -> tuple[int, float, float, float, float, int, int, str | None]:
+    """Open one file and compute partial Welford statistics.
+
+    Returns ``(count, mean, M2, global_min, global_max, num_nan, num_inf, error)``.
+    """
+    file_path, tree_name, branch_name, cut, entries_per_file = args
+    try:
+        with _open_file(file_path) as f:
+            tree = f[tree_name]
+            read_kwargs: dict[str, Any] = {}
+            if entries_per_file is not None:
+                read_kwargs["entry_stop"] = entries_per_file
+            if cut:
+                arrays = tree.arrays([branch_name], cut=cut, library="ak", **read_kwargs)
+                data_raw: Any = arrays[branch_name]
+            else:
+                data_raw = tree[branch_name].array(library="ak", **read_kwargs)
+        flat = _flatten_to_float(data_raw)
+        num_nan = int(np.sum(np.isnan(flat)))
+        num_inf = int(np.sum(np.isinf(flat)))
+        finite = flat[np.isfinite(flat)]
+        n = len(finite)
+        if n == 0:
+            return 0, 0.0, 0.0, math.inf, -math.inf, num_nan, num_inf, None
+        mean_b = float(np.mean(finite))
+        m2_b = float(np.sum((finite - mean_b) ** 2))
+        gmin = float(np.min(finite))
+        gmax = float(np.max(finite))
+        return n, mean_b, m2_b, gmin, gmax, num_nan, num_inf, None
+    except Exception as exc:
+        return 0, 0.0, 0.0, math.inf, -math.inf, 0, 0, str(exc)
+
+
+def get_dataset_statistics(
+    file_paths: list[str],
+    tree_name: str,
+    branch_name: str,
+    *,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+) -> BranchStatistics:
+    """Compute mean/std/min/max across many ROOT files using Welford's algorithm.
+
+    Percentiles (p25, p50, p75) cannot be computed in streaming fashion and are
+    returned as ``None``.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    branch_name:
+        Branch to compute statistics for.
+    cut:
+        Optional boolean selection expression applied per entry.
+    entries_per_file:
+        If set, read at most this many entries per file (for prototyping).
+    workers:
+        Number of threads for parallel file I/O (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``count``, ``mean``, ``std``, ``min``, ``max``
+    - ``p25``, ``p50``, ``p75``: always ``None`` (not computable in streaming mode)
+    - ``num_nan``, ``num_inf``
+    - ``file_paths``, ``tree_name``, ``branch_name``, ``cut``
+    - ``n_files``, ``n_files_ok``, ``n_files_failed``
+    - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
+    - ``elapsed_s``: total wall time in seconds
+    """
+    t0 = time.perf_counter()
+
+    task_args = [
+        (fp, tree_name, branch_name, cut, entries_per_file)
+        for fp in file_paths
+    ]
+
+    # Welford combiner state
+    count = 0
+    mean = 0.0
+    m2 = 0.0
+    global_min = math.inf
+    global_max = -math.inf
+    total_nan = 0
+    total_inf = 0
+    failed_files: list[dict[str, str]] = []
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for fp, partial in zip(
+            file_paths,
+            executor.map(_process_file_for_statistics, task_args),
+        ):
+            n_b, mean_b, m2_b, gmin_b, gmax_b, num_nan_b, num_inf_b, error = partial
+            if error is not None:
+                failed_files.append({"file": fp, "error": error})
+                continue
+            total_nan += num_nan_b
+            total_inf += num_inf_b
+            if n_b == 0:
+                continue
+            # Parallel Welford combination
+            n_a = count
+            combined_n = n_a + n_b
+            if n_a == 0:
+                mean = mean_b
+                m2 = m2_b
+            else:
+                delta = mean_b - mean
+                mean = (n_a * mean + n_b * mean_b) / combined_n
+                m2 = m2 + m2_b + delta ** 2 * n_a * n_b / combined_n
+            count = combined_n
+            global_min = min(global_min, gmin_b)
+            global_max = max(global_max, gmax_b)
+
+    n_files_ok = len(file_paths) - len(failed_files)
+
+    if count == 0:
+        std_val: float | None = None
+        mean_val: float | None = None
+        min_val: float | None = None
+        max_val: float | None = None
+    else:
+        mean_val = mean if math.isfinite(mean) else None
+        std_raw = math.sqrt(m2 / count) if count > 1 else 0.0
+        std_val = std_raw if math.isfinite(std_raw) else None
+        min_val = global_min if math.isfinite(global_min) else None
+        max_val = global_max if math.isfinite(global_max) else None
+
+    elapsed_s = time.perf_counter() - t0
+
+    return {
+        "count": count,
+        "mean": mean_val,
+        "std": std_val,
+        "min": min_val,
+        "max": max_val,
+        "p25": None,
+        "p50": None,
+        "p75": None,
+        "num_nan": total_nan,
+        "num_inf": total_inf,
+        "file_paths": list(file_paths),
+        "tree_name": tree_name,
+        "branch_name": branch_name,
+        "cut": cut,
+        "n_files": len(file_paths),
+        "n_files_ok": n_files_ok,
+        "n_files_failed": len(failed_files),
+        "failed_files": failed_files,
+        "elapsed_s": elapsed_s,
+    }
 
 # ---------------------------------------------------------------------------
 # Dataset kernel execution helpers
