@@ -161,7 +161,6 @@ class TestServerGetDatasetFileList:
         assert isinstance(result, dict)
 
     def test_json_serialisable(self):
-        import json
         result = server.get_dataset_file_list(
             str(FIXTURE_DIR / "*.root"), "events", workers=1
         )
@@ -196,7 +195,6 @@ class TestServerValidateDatasetSchema:
         assert isinstance(result, dict)
 
     def test_json_serialisable(self):
-        import json
         result = server.validate_dataset_schema(
             [LOCAL_FILE], "events", ["px", "py"], workers=1
         )
