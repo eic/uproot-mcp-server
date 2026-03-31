@@ -20,6 +20,7 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
 ]
 xrootd = [
     "xrootd>=5.4.0",
@@ -34,3 +35,11 @@ packages = ["src/uproot_mcp_server"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-v"
+
+[tool.coverage.run]
+source = ["uproot_mcp_server"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
