@@ -15,7 +15,8 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from uproot_mcp_server import analysis
+from uproot_mcp_server import analysis, sandbox
+from uproot_mcp_server.jobs import JobStore
 
 # ---------------------------------------------------------------------------
 # Server setup
@@ -29,6 +30,12 @@ mcp = FastMCP(
         "All tools return JSON-serialisable dictionaries."
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Module-level job store (shared across all requests)
+# ---------------------------------------------------------------------------
+
+_job_store = JobStore()
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +468,6 @@ def get_dataset_statistics(
         }
 
 
-
 @mcp.tool()
 def execute_kernel_dataset(
     file_paths: list[str],
@@ -606,6 +612,184 @@ def estimate_dataset_cost(
 
 
 # ---------------------------------------------------------------------------
+# Async job tools (Group E)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def submit_kernel_dataset(
+    file_paths: list[str],
+    tree_name: str,
+    kernel_code: str,
+    branches: list[str],
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+    page: int = 0,
+    page_size: int = 1000,
+) -> dict[str, Any]:
+    """Submit a kernel for async execution across a dataset.
+
+    Compiles the kernel immediately (fail-fast on syntax errors), then submits
+    the dataset job to a background thread pool.  Returns a job identifier that
+    can be polled via :func:`get_job_status` and retrieved via
+    :func:`get_job_result`.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    kernel_code:
+        Python source defining ``def kernel(events): ...``.
+    branches:
+        Branch names to load and pass into ``events``.
+    cut:
+        Optional boolean selection expression applied per file.
+    entries_per_file:
+        Maximum entries to read per file (``None`` reads all).
+    workers:
+        Number of parallel decompression workers.
+    page:
+        0-indexed page for array results in the final result.
+    page_size:
+        Elements per page for array results in the final result.
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``job_id``: UUID string for polling / retrieval
+    - ``status``: current job status at time of return
+    - ``n_files``: number of files submitted
+    """
+    try:
+        sandbox.compile_kernel(kernel_code)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_paths": file_paths,
+            "tree_name": tree_name,
+            "branches": branches,
+        }
+
+    try:
+        job_id = _job_store.submit(
+            analysis.run_kernel_dataset,
+            file_paths,
+            tree_name,
+            kernel_code,
+            branches,
+            cut=cut,
+            entries_per_file=entries_per_file,
+            workers=workers,
+            page=page,
+            page_size=page_size,
+        )
+        return {
+            "job_id": job_id,
+            "status": _job_store.status(job_id)["status"],
+            "n_files": len(file_paths),
+        }
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_paths": file_paths,
+            "tree_name": tree_name,
+            "branches": branches,
+        }
+
+
+@mcp.tool()
+def get_job_status(job_id: str) -> dict[str, Any]:
+    """Get the current status of a submitted async job.
+
+    Parameters
+    ----------
+    job_id:
+        Job identifier returned by :func:`submit_kernel_dataset`.
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``job_id``: echoed identifier
+    - ``status``: ``"pending"``, ``"running"``, ``"done"``, ``"failed"``,
+      or ``"cancelled"``
+    - ``submitted_at``: ISO 8601 UTC timestamp
+    - ``started_at``: ISO 8601 UTC timestamp (or ``null``)
+    - ``finished_at``: ISO 8601 UTC timestamp (or ``null``)
+    - ``error``: error message string (or ``null``)
+    """
+    try:
+        return _job_store.status(job_id)
+    except KeyError:
+        return {"error": f"Job not found: {job_id}", "job_id": job_id}
+    except Exception as exc:
+        return {"error": str(exc), "job_id": job_id}
+
+
+@mcp.tool()
+def get_job_result(job_id: str, page: int = 0, page_size: int = 1000) -> dict[str, Any]:
+    """Retrieve the result of a completed async job.
+
+    Parameters
+    ----------
+    job_id:
+        Job identifier returned by :func:`submit_kernel_dataset`.
+    page:
+        0-indexed page for array results (default 0).
+    page_size:
+        Elements per page for array results (default 1000).
+
+    Returns
+    -------
+    dict
+        The same paginated result structure returned by
+        :func:`execute_kernel_dataset`, plus ``job_id``.
+        Returns ``{"error": "..."}`` if the job is not yet done or failed.
+    """
+    try:
+        raw = _job_store.result(job_id)
+    except (KeyError, ValueError) as exc:
+        return {"error": str(exc), "job_id": job_id}
+    except Exception as exc:
+        return {"error": str(exc), "job_id": job_id}
+
+    result = _json_safe(raw)
+    if isinstance(result, dict):
+        result["job_id"] = job_id
+    return result
+
+
+@mcp.tool()
+def cancel_job(job_id: str) -> dict[str, Any]:
+    """Cancel a pending async job.
+
+    Has no effect on jobs that are already running, completed, or failed.
+
+    Parameters
+    ----------
+    job_id:
+        Job identifier returned by :func:`submit_kernel_dataset`.
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``job_id``: echoed identifier
+    - ``cancelled``: ``true`` if the job was successfully cancelled,
+      ``false`` if it was already running or in a terminal state
+    """
+    try:
+        cancelled = _job_store.cancel(job_id)
+        return {"job_id": job_id, "cancelled": cancelled}
+    except KeyError:
+        return {"error": f"Job not found: {job_id}", "job_id": job_id}
+    except Exception as exc:
+        return {"error": str(exc), "job_id": job_id}
+
 
 # ---------------------------------------------------------------------------
 # Entry point
