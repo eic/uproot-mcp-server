@@ -627,7 +627,13 @@ def _candidate_paths(path: str) -> list[str]:
         # --- XRootD path ---
         # Split into "root://hostname/" prefix and the rest of the path.
         # URL form: root://hostname//absolute/path/pattern
-        prefix_end = path.index("//", len("root://")) + 2  # past the second //
+        second_slashes = path.find("//", len("root://"))
+        if second_slashes == -1:
+            raise RuntimeError(
+                f"Invalid XRootD URL '{path}'; expected format "
+                "'root://host//absolute/path/pattern'."
+            )
+        prefix_end = second_slashes + 2  # past the second //
         server_part = path[:prefix_end]  # e.g. "root://dtn-eic.jlab.org//"
         dir_and_pattern = path[prefix_end:]  # e.g. "work/eic2/EPIC/*.root"
 
@@ -659,6 +665,9 @@ def _candidate_paths(path: str) -> list[str]:
     expanded = sorted(_glob.glob(path))
     if expanded:
         return expanded
+    # Glob pattern with no matches → return empty list rather than bogus path.
+    if _glob.has_magic(path):
+        return []
     # Treat as a literal file path (may not exist yet, let caller handle)
     return [path]
 
@@ -691,35 +700,44 @@ def get_dataset_file_list(
     - ``n_files``: ``len(file_paths)``
     - ``n_files_missing_tree``: files that exist but lack *tree_name*
     - ``missing_tree_files``: list of those file paths
+    - ``n_files_failed``: files that could not be opened (errors)
+    - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
     - ``elapsed_s``: wall-clock seconds
     """
+    if workers < 1:
+        raise ValueError(f"'workers' must be a positive integer, got {workers!r}")
     t0 = time.perf_counter()
     candidates = _candidate_paths(path)
 
     file_paths: list[str] = []
     missing_tree_files: list[str] = []
+    failed_files: list[dict[str, str]] = []
 
     def _check(fp: str) -> tuple[str, str]:
-        """Return (fp, "ok" | "missing" | "error")."""
+        """Return (fp, "ok" | "missing" | <error_msg>)."""
         try:
             with _open_file(fp) as f:
                 f[tree_name]  # metadata-only open
             return fp, "ok"
         except KeyError:
             return fp, "missing"
-        except Exception:
-            return fp, "error"
+        except Exception as exc:
+            return fp, f"error:{exc}"
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    effective_workers = min(workers, len(candidates)) if candidates else 1
+    with ThreadPoolExecutor(max_workers=effective_workers) as executor:
         for fp, status in executor.map(_check, candidates):
             if status == "ok":
                 file_paths.append(fp)
             elif status == "missing":
                 missing_tree_files.append(fp)
-            # "error" → skip silently
+            else:
+                # status is "error:<message>"
+                failed_files.append({"file": fp, "error": status[len("error:"):]})
 
     file_paths.sort()
     missing_tree_files.sort()
+    failed_files.sort(key=lambda d: d["file"])
 
     return {
         "path": path,
@@ -728,6 +746,8 @@ def get_dataset_file_list(
         "n_files": len(file_paths),
         "n_files_missing_tree": len(missing_tree_files),
         "missing_tree_files": missing_tree_files,
+        "n_files_failed": len(failed_files),
+        "failed_files": failed_files,
         "elapsed_s": round(time.perf_counter() - t0, 6),
     }
 
@@ -766,6 +786,8 @@ def validate_dataset_schema(
     - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
     - ``elapsed_s``: wall-clock seconds
     """
+    if workers < 1:
+        raise ValueError(f"'workers' must be a positive integer, got {workers!r}")
     t0 = time.perf_counter()
 
     # Per-file result: (fp, entries | None, missing_branches, error_msg | None)
@@ -782,8 +804,9 @@ def validate_dataset_schema(
         except Exception as exc:
             return fp, None, [], str(exc)
 
+    effective_workers = min(workers, len(file_paths)) if file_paths else 1
     per_file: list[PerFileResult] = []
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with ThreadPoolExecutor(max_workers=effective_workers) as executor:
         per_file = list(executor.map(_check, file_paths))
 
     total_entries = 0

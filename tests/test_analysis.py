@@ -530,7 +530,8 @@ class TestGetDatasetFileList:
             str(FIXTURE_DIR / "*.root"), "events", workers=1
         )
         for key in ("path", "tree_name", "file_paths", "n_files",
-                    "n_files_missing_tree", "missing_tree_files", "elapsed_s"):
+                    "n_files_missing_tree", "missing_tree_files",
+                    "n_files_failed", "failed_files", "elapsed_s"):
             assert key in result
 
     def test_directory_path(self):

@@ -165,6 +165,8 @@ class TestServerGetDatasetFileList:
             str(FIXTURE_DIR / "*.root"), "events", workers=1
         )
         json.dumps(result)  # must not raise
+        assert "n_files_failed" in result
+        assert "failed_files" in result
 
     def test_finds_fixture_file(self):
         result = server.get_dataset_file_list(
@@ -174,9 +176,9 @@ class TestServerGetDatasetFileList:
 
     def test_error_on_xrootd_without_pyxrootd(self):
         # Without pyxrootd installed, should return an error dict
-        import sys
-        # Only test if XRootD is not available
-        if "XRootD" not in sys.modules:
+        import importlib.util
+        # Only test if XRootD is not available in the environment
+        if importlib.util.find_spec("XRootD") is None:
             result = server.get_dataset_file_list(
                 "root://nonexistent//path/*.root", "events", workers=1
             )
@@ -199,6 +201,14 @@ class TestServerValidateDatasetSchema:
             [LOCAL_FILE], "events", ["px", "py"], workers=1
         )
         json.dumps(result)  # must not raise
+
+    def test_error_dict_includes_context(self):
+        result = server.validate_dataset_schema(
+            ["nonexistent_file.root"], "events", ["px"], workers=1
+        )
+        # Should succeed (failed_files populated) rather than raise
+        assert isinstance(result, dict)
+        json.dumps(result)
 
     def test_compatible(self):
         result = server.validate_dataset_schema(

@@ -354,13 +354,15 @@ def get_dataset_file_list(
     - ``n_files``: number of matching files
     - ``n_files_missing_tree``: count of files that exist but lack *tree_name*
     - ``missing_tree_files``: those file paths
+    - ``n_files_failed``: count of files that could not be opened
+    - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
     - ``elapsed_s``: wall-clock seconds
     """
     try:
         result = analysis.get_dataset_file_list(path, tree_name, workers=workers)
         return _json_safe(result)
     except Exception as exc:
-        return {"error": str(exc), "path": path}
+        return {"error": str(exc), "path": path, "tree_name": tree_name, "workers": workers}
 
 
 @mcp.tool()
@@ -403,7 +405,7 @@ def validate_dataset_schema(
         )
         return _json_safe(result)
     except Exception as exc:
-        return {"error": str(exc), "tree_name": tree_name}
+        return {"error": str(exc), "tree_name": tree_name, "file_paths": file_paths, "branches": branches}
 
 
 # ---------------------------------------------------------------------------
