@@ -211,6 +211,97 @@ It can be used directly by the client for plotting or further analysis.
 
 ---
 
+## `execute_kernel`
+
+Execute an arbitrary Python computation over one or more branches in a **sandboxed environment**.
+
+Use this when existing tools (`get_branch_statistics`, `histogram_branch`) are not expressive
+enough — for example to compute derived quantities from multiple branches, apply custom
+aggregations, or return structured results.
+
+### Sandbox restrictions
+
+The kernel runs under [RestrictedPython](https://restrictedpython.readthedocs.io/).
+The following are **blocked**:
+
+| Blocked | Mechanism |
+|---|---|
+| `import` / `__import__` | Not present in restricted builtins |
+| `exec`, `eval`, `open`, `compile` | Not present in restricted builtins |
+| Dunder attribute access (`obj.__class__`, etc.) | Rejected at AST compile time |
+| Writes to `np` / `ak` modules | `_write_` guard raises `AttributeError` |
+| Infinite loops / long-running code | 30-second wall-clock timeout; subprocess is forcefully terminated (SIGTERM then SIGKILL) |
+
+Available inside kernels: `np` (numpy), `ak` (awkward-array), and a safe subset of
+built-ins: `len`, `range`, `list`, `dict`, `tuple`, `set`, `int`, `float`, `bool`, `str`,
+`abs`, `min`, `max`, `sum`, `round`, `zip`, `enumerate`, `map`, `filter`, `sorted`,
+`reversed`, `isinstance`, `print`, and standard exception types.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `file_path` | string | ✓ | Local path or XRootD URL to the ROOT file |
+| `tree_name` | string | ✓ | Name of the TTree |
+| `kernel_code` | string | ✓ | Python source defining `def kernel(events): ...` |
+| `branches` | array of strings | ✓ | Branch names to load and pass as `events` |
+| `cut` | string | — | Optional boolean selection expression |
+| `entry_start` | integer | — | First entry index |
+| `entry_stop` | integer | — | Last entry index |
+| `page` | integer | — | 0-indexed page number for array results (default `0`) |
+| `page_size` | integer | — | Elements per page for array results (default `1000`) |
+
+### Kernel interface
+
+The kernel receives `events` — a `dict[str, array]` keyed by the names in `branches`.
+It may return:
+
+- An **array** (numpy ndarray, awkward Array, or list) — paginated automatically
+- A **scalar** (int, float, bool) — returned as-is
+- A **dict** — returned as-is (must be JSON-serialisable)
+
+### Example request
+
+```json
+{
+  "file_path": "root://dtn-eic.jlab.org//path/to/file.root",
+  "tree_name": "events",
+  "kernel_code": "def kernel(events):\n    px = events['ReconstructedParticles.momentum.x']\n    py = events['ReconstructedParticles.momentum.y']\n    pz = events['ReconstructedParticles.momentum.z']\n    return np.sqrt(px**2 + py**2 + pz**2)\n",
+  "branches": [
+    "ReconstructedParticles.momentum.x",
+    "ReconstructedParticles.momentum.y",
+    "ReconstructedParticles.momentum.z"
+  ],
+  "page": 0,
+  "page_size": 1000
+}
+```
+
+### Example response (array)
+
+```json
+{
+  "result_type": "array",
+  "data": [1.23, 0.87, 10.41, "..."],
+  "total": 9698,
+  "page": 0,
+  "page_size": 1000,
+  "page_count": 10,
+  "has_more": true,
+  "file_path": "root://dtn-eic.jlab.org//path/to/file.root",
+  "tree_name": "events",
+  "branches": ["ReconstructedParticles.momentum.x", "..."],
+  "cut": null,
+  "entry_start": null,
+  "entry_stop": null
+}
+```
+
+For scalar or dict results, `result_type` is `"scalar"` or `"dict"` and pagination
+fields (`total`, `page_count`, `has_more`) are absent.
+
+---
+
 ## Error handling
 
 All tools catch exceptions and return an error dictionary rather than raising.

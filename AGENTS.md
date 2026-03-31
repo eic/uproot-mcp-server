@@ -19,6 +19,7 @@ This document provides guidance for AI agents (GitHub Copilot, Claude, ChatGPT, 
 src/uproot_mcp_server/
 ├── __init__.py       # Package marker
 ├── analysis.py       # Core ROOT file analysis logic (uproot, numpy, awkward)
+├── sandbox.py        # RestrictedPython sandbox for execute_kernel tool
 └── server.py         # FastMCP server, tool definitions and entry point
 
 tests/
@@ -26,6 +27,7 @@ tests/
 │   ├── create_fixture.py  # Script that generates tests/fixtures/test_eic.root
 │   └── test_eic.root      # Synthetic ROOT file used by local tests
 ├── test_analysis.py  # Tests for analysis.py public API
+├── test_sandbox.py   # Tests for sandbox.py (compile/execute kernel, blocked ops)
 └── test_server.py    # Tests for server-level tool wrappers
 ```
 
@@ -34,9 +36,12 @@ tests/
 ### 1. Analysis Layer Separation
 - **`analysis.py`**: Pure computation — opens files, reads arrays, returns plain Python dicts.
   No MCP-specific code here.
+- **`sandbox.py`**: RestrictedPython sandbox used by `execute_kernel`. Compiles and runs
+  client-supplied kernel code with a whitelist of safe builtins and a timeout guard.
+  Raises `KernelError` (a `ValueError` subclass) on any violation.
 - **`server.py`**: Thin MCP wrapper — calls `analysis.*` functions, applies `_json_safe()`,
   and catches exceptions, returning an error dict instead of raising.
-- Keep the two layers decoupled so `analysis.py` is independently testable.
+- Keep the layers decoupled so `analysis.py` and `sandbox.py` are independently testable.
 
 ### 2. JSON Serialisability
 - All tool return values must be JSON-serialisable.
@@ -131,7 +136,10 @@ def my_new_analysis(
 ```
 
 3. **Add tests** in `tests/test_analysis.py` and `tests/test_server.py`
-4. **Update documentation**: Add to README.md tool list
+4. **Update documentation**: Add to README.md tool list and `docs/TOOLS.md`
+
+If the tool runs client-supplied code, place the sandboxing logic in `sandbox.py`
+and use `KernelError` for all policy violations.
 
 ### Modifying Analysis Functions
 

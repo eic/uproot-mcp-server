@@ -242,6 +242,86 @@ def histogram_branch(
         }
 
 
+@mcp.tool()
+def execute_kernel(
+    file_path: str,
+    tree_name: str,
+    kernel_code: str,
+    branches: list[str],
+    cut: str | None = None,
+    entry_start: int | None = None,
+    entry_stop: int | None = None,
+    page: int = 0,
+    page_size: int = 1000,
+) -> dict[str, Any]:
+    """Execute a sandboxed Python kernel over ROOT file branch data.
+
+    The kernel is a Python function that receives a dict of branch arrays and
+    returns a computed result.  Imports, file I/O, ``exec``, ``eval``, and
+    dangerous builtins are all blocked.  Only ``np`` (numpy) and ``ak``
+    (awkward-array) are available as named packages.
+
+    Parameters
+    ----------
+    file_path:
+        Local path or XRootD URL to the ROOT file.
+    tree_name:
+        Name of the TTree.
+    kernel_code:
+        Python source defining ``def kernel(events): ...``.
+        ``events`` is a ``dict[str, array]`` keyed by the names in
+        *branches*.  Example::
+
+            def kernel(events):
+                px = events["ReconstructedParticles.momentum.x"]
+                py = events["ReconstructedParticles.momentum.y"]
+                pz = events["ReconstructedParticles.momentum.z"]
+                return np.sqrt(px**2 + py**2 + pz**2)
+
+    branches:
+        List of branch names to load and pass into ``events``.
+    cut:
+        Optional boolean selection expression (same semantics as other tools).
+    entry_start, entry_stop:
+        Integer indices to slice the tree (Python-style).
+    page:
+        0-indexed page number for array-like results (default 0).
+    page_size:
+        Number of elements per page for array-like results (default 1000).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``result_type``: ``"array"``, ``"scalar"``, or ``"dict"``
+    - ``data``: the result (a page slice for array results)
+    - For array results: ``total``, ``page``, ``page_size``, ``page_count``,
+      ``has_more``
+    - Metadata: ``file_path``, ``tree_name``, ``branches``, ``cut``,
+      ``entry_start``, ``entry_stop``
+    """
+    try:
+        result = analysis.run_kernel(
+            file_path,
+            tree_name,
+            kernel_code,
+            branches,
+            cut=cut,
+            entry_start=entry_start,
+            entry_stop=entry_stop,
+            page=page,
+            page_size=page_size,
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_path": file_path,
+            "tree_name": tree_name,
+            "branches": branches,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

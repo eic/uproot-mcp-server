@@ -380,3 +380,115 @@ class TestHistogramBranch:
         assert isinstance(result, dict)
         assert "counts" in result
         assert len(result["counts"]) == 50
+
+
+# ---------------------------------------------------------------------------
+# TestRunKernel
+# ---------------------------------------------------------------------------
+
+REQUIRED_KERNEL_ARRAY_FIELDS = (
+    "result_type", "data", "total", "page", "page_size", "page_count",
+    "has_more", "file_path", "tree_name", "branches",
+)
+
+REQUIRED_KERNEL_SCALAR_FIELDS = (
+    "result_type", "data", "file_path", "tree_name", "branches",
+)
+
+
+class TestRunKernel:
+    def test_single_branch_passthrough(self):
+        code = "def kernel(events):\n    return events['px']\n"
+        result = analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
+        assert isinstance(result, dict)
+        for field in REQUIRED_KERNEL_ARRAY_FIELDS:
+            assert field in result, f"missing field: {field}"
+        assert result["result_type"] == "array"
+        assert result["total"] == 1000
+
+    def test_multi_branch_derived_quantity(self):
+        """Kernel computing magnitude of 3-momentum."""
+        code = (
+            "def kernel(events):\n"
+            "    px = events['px']\n"
+            "    py = events['py']\n"
+            "    pz = events['pz']\n"
+            "    return np.sqrt(px**2 + py**2 + pz**2)\n"
+        )
+        result = analysis.run_kernel(
+            LOCAL_FILE, "events", code, ["px", "py", "pz"]
+        )
+        assert result["result_type"] == "array"
+        assert result["total"] == 1000
+        # All momenta magnitudes must be non-negative
+        assert all(v >= 0 for v in result["data"])
+
+    def test_scalar_return(self):
+        code = "def kernel(events):\n    return float(np.mean(events['px']))\n"
+        result = analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
+        assert result["result_type"] == "scalar"
+        assert isinstance(result["data"], float)
+
+    def test_dict_return(self):
+        code = (
+            "def kernel(events):\n"
+            "    return {'mean': float(np.mean(events['px'])), 'n': len(events['px'])}\n"
+        )
+        result = analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
+        assert result["result_type"] == "dict"
+        assert result["data"]["n"] == 1000
+
+    def test_pagination_first_page(self):
+        code = "def kernel(events):\n    return events['px']\n"
+        result = analysis.run_kernel(
+            LOCAL_FILE, "events", code, ["px"], page=0, page_size=100
+        )
+        assert result["page"] == 0
+        assert result["page_size"] == 100
+        assert len(result["data"]) == 100
+        assert result["total"] == 1000
+        assert result["page_count"] == 10
+        assert result["has_more"] is True
+
+    def test_pagination_last_page(self):
+        code = "def kernel(events):\n    return events['px']\n"
+        result = analysis.run_kernel(
+            LOCAL_FILE, "events", code, ["px"], page=9, page_size=100
+        )
+        assert result["page"] == 9
+        assert len(result["data"]) == 100
+        assert result["has_more"] is False
+
+    def test_pagination_out_of_range_raises(self):
+        code = "def kernel(events):\n    return events['px']\n"
+        with pytest.raises(ValueError, match="out of range"):
+            analysis.run_kernel(
+                LOCAL_FILE, "events", code, ["px"], page=99, page_size=100
+            )
+
+    def test_entry_range(self):
+        code = "def kernel(events):\n    return events['px']\n"
+        result = analysis.run_kernel(
+            LOCAL_FILE, "events", code, ["px"],
+            entry_start=0, entry_stop=200, page_size=500,
+        )
+        assert result["total"] == 200
+
+    def test_invalid_branch_raises(self):
+        code = "def kernel(events):\n    return events['nonexistent']\n"
+        with pytest.raises(ValueError, match="not found"):
+            analysis.run_kernel(
+                LOCAL_FILE, "events", code, ["nonexistent"]
+            )
+
+    def test_invalid_kernel_raises(self):
+        from uproot_mcp_server.sandbox import KernelError
+        code = "def kernel(events):\n    import os\n    return os.getcwd()\n"
+        with pytest.raises(KernelError):
+            analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
+
+    def test_json_serialisable(self):
+        import json
+        code = "def kernel(events):\n    return events['px']\n"
+        result = analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
+        json.dumps(result)  # must not raise

@@ -22,6 +22,7 @@ import uproot
 FileStructure = dict[str, Any]
 BranchStatistics = dict[str, Any]
 HistogramResult = dict[str, Any]
+KernelResult = dict[str, Any]
 TreeInfo = dict[str, Any]
 
 
@@ -415,3 +416,184 @@ def histogram_branch(
             "mean": mean if math.isfinite(mean) else None,
             "std": std if math.isfinite(std) else None,
         }
+
+
+# ---------------------------------------------------------------------------
+# Kernel execution
+# ---------------------------------------------------------------------------
+
+
+def _normalize_json(v: Any) -> Any:
+    """Recursively convert *v* to a JSON-serialisable Python type.
+
+    Handles ``numpy`` scalars and arrays, ``awkward`` arrays, non-finite floats
+    (mapped to ``None``), and nested ``dict`` / ``list`` / ``tuple`` containers.
+    """
+    if isinstance(v, dict):
+        return {k: _normalize_json(val) for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_normalize_json(item) for item in v]
+    if isinstance(v, np.generic):
+        val = v.item()
+        if isinstance(val, float) and not math.isfinite(val):
+            return None
+        return val
+    if isinstance(v, np.ndarray):
+        return _normalize_json(v.tolist())
+    if isinstance(v, ak.Array):
+        return _normalize_json(ak.to_list(v))
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
+
+
+def _paginate(
+    data: Any,
+    page: int,
+    page_size: int,
+    result_type: str,
+    meta: dict[str, Any],
+) -> KernelResult:
+    """Slice *data* to the requested page and return a paginated result dict.
+
+    *data* may be an ``ak.Array``, ``np.ndarray``, ``list``, or ``tuple``.
+    Only the requested page slice is materialised to a Python list, avoiding
+    the overhead of converting the entire result before slicing.
+    """
+    total = len(data)
+    page_count = max(1, math.ceil(total / page_size))
+
+    if page >= page_count and total > 0:
+        raise ValueError(
+            f"page {page} is out of range "
+            f"(total pages: {page_count}, total items: {total})"
+        )
+
+    start = page * page_size
+    end = start + page_size
+    page_slice = data[start:end]
+
+    if isinstance(page_slice, ak.Array):
+        page_data: list[Any] = ak.to_list(page_slice)
+    elif isinstance(page_slice, np.ndarray):
+        page_data = page_slice.tolist()
+    else:
+        page_data = list(page_slice)
+
+    return {
+        "result_type": result_type,
+        "data": page_data,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "page_count": page_count,
+        "has_more": end < total,
+        **meta,
+    }
+
+
+def run_kernel(
+    file_path: str,
+    tree_name: str,
+    kernel_code: str,
+    branches: list[str],
+    *,
+    cut: str | None = None,
+    entry_start: int | None = None,
+    entry_stop: int | None = None,
+    page: int = 0,
+    page_size: int = 1000,
+) -> KernelResult:
+    """Load branches from a ROOT file and execute a sandboxed kernel.
+
+    The kernel is a Python function ``def kernel(events): ...`` where
+    ``events`` is a ``dict[str, array]`` keyed by the names in *branches*.
+    Only ``np`` (numpy) and ``ak`` (awkward) are available inside the kernel;
+    imports, file I/O, and dangerous builtins are blocked.
+
+    Parameters
+    ----------
+    file_path:
+        Path or XRootD URL to the ROOT file.
+    tree_name:
+        Name of the TTree.
+    kernel_code:
+        Python source defining ``def kernel(events): ...``.
+    branches:
+        Branch names to load and inject into ``events``.
+    cut:
+        Optional boolean selection expression applied before loading.
+    entry_start, entry_stop:
+        Slice the tree to a sub-range of entries.
+    page:
+        0-indexed page number for array-like results (default 0).
+    page_size:
+        Elements per page for array-like results (default 1000).
+
+    Returns
+    -------
+    dict
+        Always contains ``result_type`` (``"array"``, ``"scalar"``, or
+        ``"dict"``), ``data``, and request metadata.  Array results also
+        include ``total``, ``page``, ``page_size``, ``page_count``,
+        ``has_more``.
+    """
+    if page < 0:
+        raise ValueError(f"page must be >= 0, got {page}")
+    if page_size < 1:
+        raise ValueError(f"page_size must be >= 1, got {page_size}")
+
+    # Compile first — fast, catches errors before opening the (potentially
+    # remote) file.
+    from uproot_mcp_server.sandbox import compile_kernel  # noqa: PLC0415
+    from uproot_mcp_server.sandbox import execute_kernel as _execute_kernel  # noqa: PLC0415
+
+    code_obj = compile_kernel(kernel_code)
+
+    with _open_file(file_path) as f:
+        tree = f[tree_name]
+
+        available = set(tree.keys())
+        for b in branches:
+            if b not in available:
+                raise ValueError(
+                    f"Branch '{b}' not found in tree '{tree_name}'"
+                )
+
+        read_kwargs: dict[str, Any] = {}
+        if entry_start is not None:
+            read_kwargs["entry_start"] = entry_start
+        if entry_stop is not None:
+            read_kwargs["entry_stop"] = entry_stop
+
+        arrays_kwargs: dict[str, Any] = dict(read_kwargs)
+        if cut:
+            arrays_kwargs["cut"] = cut
+
+        arrays_ak = tree.arrays(branches, library="ak", **arrays_kwargs)
+        branches_data: dict[str, Any] = {b: arrays_ak[b] for b in branches}
+
+    result = _execute_kernel(code_obj, branches_data)
+
+    meta: dict[str, Any] = {
+        "file_path": file_path,
+        "tree_name": tree_name,
+        "branches": branches,
+        "cut": cut,
+        "entry_start": entry_start,
+        "entry_stop": entry_stop,
+        "page": page,
+        "page_size": page_size,
+    }
+
+    if isinstance(result, ak.Array):
+        return _paginate(result, page, page_size, "array", meta)
+    if isinstance(result, np.ndarray):
+        return _paginate(result.ravel(), page, page_size, "array", meta)
+    if isinstance(result, (list, tuple)):
+        return _paginate(result, page, page_size, "array", meta)
+    if isinstance(result, dict):
+        return {"result_type": "dict", "data": _normalize_json(result), **meta}
+    # Scalar: convert numpy scalars to plain Python types
+    scalar: Any = _normalize_json(result)
+    return {"result_type": "scalar", "data": scalar, **meta}
