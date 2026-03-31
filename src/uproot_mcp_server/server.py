@@ -322,6 +322,149 @@ def execute_kernel(
         }
 
 
+@mcp.tool()
+def execute_kernel_dataset(
+    file_paths: list[str],
+    tree_name: str,
+    kernel_code: str,
+    branches: list[str],
+    reduce_code: str | None = None,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+    page: int = 0,
+    page_size: int = 1000,
+) -> dict[str, Any]:
+    """Run a sandboxed kernel over multiple ROOT files and auto-reduce the results.
+
+    The kernel is compiled once, then executed per-file in a RestrictedPython
+    subprocess.  Partial results are accumulated and reduced automatically
+    based on the result type of the first successful file.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    kernel_code:
+        Python source defining ``def kernel(events): ...``.
+        ``events`` is a ``dict[str, array]`` keyed by the names in *branches*.
+    branches:
+        Branch names to load and pass into ``events``.
+    reduce_code:
+        Optional Python source defining ``def reduce(a, b): ...``.
+        Applied as a left fold over partial results.  If omitted, an
+        automatic reduction strategy is chosen based on the result type.
+    cut:
+        Optional boolean selection expression applied per file.
+    entries_per_file:
+        Maximum entries to read per file (``None`` reads all).
+    workers:
+        Reserved for future parallel execution (currently unused).
+    page:
+        0-indexed page for array results (default 0).
+    page_size:
+        Elements per page for array results (default 1000).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``result_type``: ``"array"``, ``"scalar"``, ``"dict"``, or ``"empty"``
+    - ``data``: reduced result (paginated slice for arrays)
+    - ``n_files``, ``n_files_ok``, ``n_files_failed``, ``failed_files``
+    - ``per_file_elapsed_s``: list of per-file wall times
+    - ``elapsed_s``: total wall time
+    - Array results additionally include: ``total``, ``page``, ``page_size``,
+      ``page_count``, ``has_more``
+    - Scalar results additionally include: ``sum``, ``mean``
+    """
+    try:
+        result = analysis.run_kernel_dataset(
+            file_paths,
+            tree_name,
+            kernel_code,
+            branches,
+            reduce_code=reduce_code,
+            cut=cut,
+            entries_per_file=entries_per_file,
+            workers=workers,
+            page=page,
+            page_size=page_size,
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_paths": file_paths,
+            "tree_name": tree_name,
+            "branches": branches,
+        }
+
+
+@mcp.tool()
+def estimate_dataset_cost(
+    file_paths: list[str],
+    tree_name: str,
+    kernel_code: str,
+    branches: list[str],
+    sample_files: int = 3,
+    entries_per_file: int = 1000,
+) -> dict[str, Any]:
+    """Measure kernel performance on a sample and extrapolate to the full dataset.
+
+    Opens each file metadata-only to count total entries, then times the kernel
+    on a small sample to produce a wall-time cost estimate for the full dataset.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    kernel_code:
+        Python source defining ``def kernel(events): ...``.
+    branches:
+        Branch names required by the kernel.
+    sample_files:
+        Number of files to sample (default 3).
+    entries_per_file:
+        Maximum entries per sample file (default 1000).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``n_files``: total number of files in the dataset
+    - ``total_entries``: sum of all ``num_entries`` across files
+    - ``sample_files_used``: number of files actually sampled
+    - ``entries_per_second``: throughput measured on the sample
+    - ``estimated_total_seconds``: extrapolated wall time for the full dataset
+    - ``recommended_prototype_entries_per_file``: entries per file keeping a
+      full-dataset run under 30 s
+    - ``sample_elapsed_s``: wall time for all sample kernel executions
+    - ``elapsed_s``: total wall time including metadata reads
+    """
+    try:
+        result = analysis.estimate_dataset_cost(
+            file_paths,
+            tree_name,
+            kernel_code,
+            branches,
+            sample_files=sample_files,
+            entries_per_file=entries_per_file,
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_paths": file_paths,
+            "tree_name": tree_name,
+            "branches": branches,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
