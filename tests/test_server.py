@@ -243,3 +243,83 @@ class TestServerEstimateDatasetCost:
             ["/nonexistent.root"], "events", _SCALAR_KERNEL, ["px"],
         )
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Async job tools (Group E)
+# ---------------------------------------------------------------------------
+
+import time as _time
+
+
+class TestAsyncJobTools:
+    def test_submit_returns_job_id(self):
+        result = server.submit_kernel_dataset(
+            [LOCAL_FILE], "events", _SCALAR_KERNEL, ["px"],
+        )
+        assert "error" not in result
+        assert "job_id" in result
+        assert result["status"] == "pending"
+        assert result["n_files"] == 1
+
+    def test_get_status(self):
+        result = server.submit_kernel_dataset(
+            [LOCAL_FILE], "events", _SCALAR_KERNEL, ["px"],
+        )
+        job_id = result["job_id"]
+        status = server.get_job_status(job_id)
+        assert status["job_id"] == job_id
+        assert status["status"] in ("pending", "running", "done")
+        assert "submitted_at" in status
+
+    def test_get_result(self):
+        result = server.submit_kernel_dataset(
+            [LOCAL_FILE], "events", _SCALAR_KERNEL, ["px"],
+        )
+        job_id = result["job_id"]
+
+        # Poll for completion
+        deadline = _time.monotonic() + 30.0
+        while _time.monotonic() < deadline:
+            s = server.get_job_status(job_id)
+            if s["status"] in ("done", "failed", "cancelled"):
+                break
+            _time.sleep(0.1)
+
+        assert server.get_job_status(job_id)["status"] == "done"
+        r = server.get_job_result(job_id)
+        assert "error" not in r
+        assert r["job_id"] == job_id
+        assert _is_json_serialisable(r)
+
+    def test_cancel(self):
+        # Submit with a single-worker store scenario — just check the API shape
+        result = server.submit_kernel_dataset(
+            [LOCAL_FILE], "events", _SCALAR_KERNEL, ["px"],
+        )
+        job_id = result["job_id"]
+        cancel_result = server.cancel_job(job_id)
+        assert cancel_result["job_id"] == job_id
+        assert isinstance(cancel_result["cancelled"], bool)
+
+    def test_get_result_not_found(self):
+        r = server.get_job_result("nonexistent-job-id")
+        assert "error" in r
+
+    def test_get_status_not_found(self):
+        r = server.get_job_status("nonexistent-job-id")
+        assert "error" in r
+
+    def test_cancel_not_found(self):
+        r = server.cancel_job("nonexistent-job-id")
+        assert "error" in r
+
+    def test_compile_error_before_submit(self):
+        """Syntax error in kernel code → error dict returned, no job created."""
+        result = server.submit_kernel_dataset(
+            [LOCAL_FILE], "events",
+            "def kernel(events):\n    return (",  # unclosed paren → SyntaxError
+            ["px"],
+        )
+        assert "error" in result
+        assert "job_id" not in result
