@@ -30,6 +30,7 @@ from typing import Any
 import awkward as ak
 import numpy as np
 from RestrictedPython import compile_restricted, safe_builtins
+from RestrictedPython.Guards import guarded_unpack_sequence
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,7 @@ def _make_safe_globals() -> dict[str, Any]:
         "_getiter_": _getiter_,
         "_write_": _write_,
         "_inplacevar_": _inplacevar_,
+        "_unpack_sequence_": guarded_unpack_sequence,
         "np": np,
         "ak": ak,
     }
@@ -190,6 +192,41 @@ def compile_kernel(code: str) -> types.CodeType:
         )
 
     return code_obj
+
+
+def _reduce_worker(
+    code_bytes: bytes,
+    a: Any,
+    b: Any,
+    conn: Any,
+) -> None:
+    """Worker function executed in a subprocess to run the reduce function.
+
+    Compiles and runs the reduce code, then sends the result (or an error
+    description) through *conn*.  Expects a callable named ``reduce`` that
+    accepts two arguments.
+    """
+    code_obj = marshal.loads(code_bytes)
+    globs = _make_safe_globals()
+
+    try:
+        exec(code_obj, globs)  # noqa: S102 — intentional restricted exec
+    except Exception as exc:
+        conn.send(("def_error", str(exc)))
+        conn.close()
+        return
+
+    if "reduce" not in globs or not callable(globs["reduce"]):
+        conn.send(("missing", None))
+        conn.close()
+        return
+
+    try:
+        result = globs["reduce"](a, b)
+        conn.send(("ok", result))
+    except Exception as exc:  # noqa: BLE001
+        conn.send(("run_error", str(exc)))
+    conn.close()
 
 
 def _kernel_worker(
@@ -299,3 +336,74 @@ def execute_kernel(
         raise KernelError("Kernel code must define a callable named 'kernel'")
     # status == "run_error"
     raise KernelError(f"Kernel raised an exception: {payload}")
+
+
+def execute_reduce(
+    code_obj: types.CodeType,
+    a: Any,
+    b: Any,
+    *,
+    timeout: float = 30.0,
+) -> Any:
+    """Execute a compiled ``reduce(a, b)`` function in a restricted subprocess.
+
+    The reduce function runs in a separate :class:`multiprocessing.Process`
+    with the same RestrictedPython sandbox as :func:`execute_kernel`.
+
+    Parameters
+    ----------
+    code_obj:
+        Code object from :func:`compile_kernel` — must define ``def reduce(a, b): ...``.
+    a:
+        Left operand (accumulated result so far).
+    b:
+        Right operand (next partial result).
+    timeout:
+        Wall-clock execution limit in seconds (default: 30).
+
+    Returns
+    -------
+    Any
+        Return value of ``reduce(a, b)``.
+
+    Raises
+    ------
+    KernelError
+        If the reduce definition fails, no callable named ``reduce`` is found,
+        execution raises an exception, or the timeout is exceeded.
+    """
+    code_bytes = marshal.dumps(code_obj)
+    parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+
+    proc = multiprocessing.Process(
+        target=_reduce_worker,
+        args=(code_bytes, a, b, child_conn),
+        daemon=True,
+    )
+    proc.start()
+    child_conn.close()
+
+    if not parent_conn.poll(timeout):
+        proc.terminate()
+        proc.join(2.0)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(1.0)
+        raise KernelError(f"Reduce execution timed out after {timeout:.1f} s")
+
+    proc.join()
+
+    try:
+        status, payload = parent_conn.recv()
+    except EOFError as exc:
+        raise KernelError(
+            f"Reduce process exited unexpectedly (exit code: {proc.exitcode})"
+        ) from exc
+
+    if status == "ok":
+        return payload
+    if status == "def_error":
+        raise KernelError(f"Reduce definition failed: {payload}")
+    if status == "missing":
+        raise KernelError("reduce_code must define a callable named 'reduce'")
+    raise KernelError(f"Reduce raised an exception: {payload}")
