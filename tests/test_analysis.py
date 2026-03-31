@@ -492,3 +492,102 @@ class TestRunKernel:
         code = "def kernel(events):\n    return events['px']\n"
         result = analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
         json.dumps(result)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# TestGetDatasetFileList
+# ---------------------------------------------------------------------------
+
+class TestGetDatasetFileList:
+    def test_returns_dict(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        assert isinstance(result, dict)
+
+    def test_finds_fixture_file(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        assert result["n_files"] >= 1
+        assert any("test_eic.root" in p for p in result["file_paths"])
+
+    def test_missing_tree(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "nonexistent_tree", workers=1
+        )
+        assert result["n_files_missing_tree"] >= 1
+
+    def test_elapsed_s(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        assert "elapsed_s" in result
+        assert result["elapsed_s"] >= 0.0
+
+    def test_result_keys(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR / "*.root"), "events", workers=1
+        )
+        for key in ("path", "tree_name", "file_paths", "n_files",
+                    "n_files_missing_tree", "missing_tree_files", "elapsed_s"):
+            assert key in result
+
+    def test_directory_path(self):
+        result = analysis.get_dataset_file_list(
+            str(FIXTURE_DIR), "events", workers=1
+        )
+        assert result["n_files"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# TestValidateDatasetSchema
+# ---------------------------------------------------------------------------
+
+class TestValidateDatasetSchema:
+    def test_valid_schema(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "py", "pz"], workers=1
+        )
+        assert isinstance(result, dict)
+        assert result["n_files"] == 1
+        assert result["n_files_ok"] == 1
+        assert result["compatible"] is True
+        assert result["total_entries"] > 0
+
+    def test_missing_branch(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "nonexistent_branch_xyz"], workers=1
+        )
+        assert result["compatible"] is False
+        assert "nonexistent_branch_xyz" in result["missing_branch_files"]
+
+    def test_bad_tree(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "nonexistent_tree", ["px"], workers=1
+        )
+        assert result["n_files_failed"] == 1
+        assert result["compatible"] is False
+
+    def test_elapsed_s(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px"], workers=1
+        )
+        assert "elapsed_s" in result
+        assert result["elapsed_s"] >= 0.0
+
+    def test_result_keys(self):
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px"], workers=1
+        )
+        for key in ("compatible", "n_files", "n_files_ok", "n_files_failed",
+                    "total_entries", "missing_branch_files", "failed_files",
+                    "elapsed_s"):
+            assert key in result
+
+    def test_json_serialisable(self):
+        import json
+        result = analysis.validate_dataset_schema(
+            [LOCAL_FILE], "events", ["px", "py"], workers=1
+        )
+        json.dumps(result)  # must not raise

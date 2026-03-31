@@ -326,6 +326,91 @@ def execute_kernel(
 # Entry point
 # ---------------------------------------------------------------------------
 
+@mcp.tool()
+def get_dataset_file_list(
+    path: str,
+    tree_name: str,
+    workers: int = 4,
+) -> dict[str, Any]:
+    """List ROOT files matching a path pattern that contain a given TTree.
+
+    Parameters
+    ----------
+    path:
+        Glob pattern or directory path, e.g. ``"/data/*.root"`` or
+        ``"root://server//dir/*.root"``.
+    tree_name:
+        Name of the TTree that must be present in each file.
+    workers:
+        Number of parallel threads for per-file metadata checks (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``path``: echoed input path
+    - ``tree_name``: echoed tree name
+    - ``file_paths``: sorted list of file paths that contain *tree_name*
+    - ``n_files``: number of matching files
+    - ``n_files_missing_tree``: count of files that exist but lack *tree_name*
+    - ``missing_tree_files``: those file paths
+    - ``elapsed_s``: wall-clock seconds
+    """
+    try:
+        result = analysis.get_dataset_file_list(path, tree_name, workers=workers)
+        return _json_safe(result)
+    except Exception as exc:
+        return {"error": str(exc), "path": path}
+
+
+@mcp.tool()
+def validate_dataset_schema(
+    file_paths: list[str],
+    tree_name: str,
+    branches: list[str],
+    workers: int = 4,
+) -> dict[str, Any]:
+    """Verify that all files contain the expected TTree and branches.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to check.
+    tree_name:
+        Name of the TTree that must be present in every file.
+    branches:
+        Branch names that must exist in the tree.
+    workers:
+        Number of parallel threads for per-file metadata reads (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``compatible``: ``True`` if every file is readable and has all branches
+    - ``n_files``: total files checked
+    - ``n_files_ok``: files with tree and all requested branches present
+    - ``n_files_failed``: files that could not be opened or lacked the tree
+    - ``total_entries``: sum of ``num_entries`` across all ok files
+    - ``missing_branch_files``: ``{branch_name: [file, ...]}`` for branches
+      absent in at least one file
+    - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
+    - ``elapsed_s``: wall-clock seconds
+    """
+    try:
+        result = analysis.validate_dataset_schema(
+            file_paths, tree_name, branches, workers=workers
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {"error": str(exc), "tree_name": tree_name}
+
+
+# ---------------------------------------------------------------------------
+# Entry point (duplicated header removed above)
+# ---------------------------------------------------------------------------
+
+
 def main() -> None:
     """Run the MCP server using stdio transport."""
     mcp.run(transport="stdio")

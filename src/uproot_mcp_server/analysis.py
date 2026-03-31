@@ -7,7 +7,10 @@ All public functions return plain Python dicts suitable for JSON serialization.
 
 from __future__ import annotations
 
+import glob as _glob
 import math
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import awkward as ak
@@ -24,6 +27,8 @@ BranchStatistics = dict[str, Any]
 HistogramResult = dict[str, Any]
 KernelResult = dict[str, Any]
 TreeInfo = dict[str, Any]
+DatasetFileList = dict[str, Any]
+DatasetSchemaResult = dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -597,3 +602,223 @@ def run_kernel(
     # Scalar: convert numpy scalars to plain Python types
     scalar: Any = _normalize_json(result)
     return {"result_type": "scalar", "data": scalar, **meta}
+
+
+# ---------------------------------------------------------------------------
+# Dataset / multi-file tools
+# ---------------------------------------------------------------------------
+
+
+def _candidate_paths(path: str) -> list[str]:
+    """Expand *path* to a list of candidate file paths.
+
+    Handles three cases:
+
+    - **Local glob** (``/data/*.root``, ``/data/``): use :func:`glob.glob`.
+      If *path* is a directory, ``/*.root`` is appended automatically.
+    - **XRootD glob** (``root://server//dir/*.root``): try
+      ``XRootD.client.FileSystem`` if pyxrootd is available; otherwise
+      raise :class:`RuntimeError` with an installation hint.
+    - **Plain local file**: return a single-element list.
+    """
+    import os
+
+    if path.startswith("root://"):
+        # --- XRootD path ---
+        # Split into "root://hostname/" prefix and the rest of the path.
+        # URL form: root://hostname//absolute/path/pattern
+        prefix_end = path.index("//", len("root://")) + 2  # past the second //
+        server_part = path[:prefix_end]  # e.g. "root://dtn-eic.jlab.org//"
+        dir_and_pattern = path[prefix_end:]  # e.g. "work/eic2/EPIC/*.root"
+
+        # Separate directory and filename pattern
+        dir_part = dir_and_pattern.rsplit("/", 1)[0]
+        pattern = dir_and_pattern.rsplit("/", 1)[1] if "/" in dir_and_pattern else "*"
+
+        try:
+            from XRootD import client as xrd_client  # type: ignore[import]
+            fs = xrd_client.FileSystem(server_part)
+            status, listing = fs.dirlist("/" + dir_part, flags=xrd_client.flags.DirListFlags.STAT)
+            if not status.ok:
+                raise RuntimeError(f"XRootD dirlist failed: {status.message}")
+            import fnmatch
+            candidates = []
+            for entry in listing:
+                if fnmatch.fnmatch(entry.name, pattern):
+                    candidates.append(f"{server_part}{dir_part}/{entry.name}")
+            return sorted(candidates)
+        except ImportError:
+            raise RuntimeError(
+                "XRootD glob requires pyxrootd installation: "
+                "pip install pyxrootd"
+            )
+
+    # --- Local path ---
+    if os.path.isdir(path):
+        return sorted(_glob.glob(os.path.join(path, "*.root")))
+    expanded = sorted(_glob.glob(path))
+    if expanded:
+        return expanded
+    # Treat as a literal file path (may not exist yet, let caller handle)
+    return [path]
+
+
+def get_dataset_file_list(
+    path: str,
+    tree_name: str,
+    *,
+    workers: int = 4,
+) -> DatasetFileList:
+    """List ROOT files matching a path pattern that contain a given TTree.
+
+    Parameters
+    ----------
+    path:
+        Glob pattern or directory path, e.g. ``"/data/*.root"`` or
+        ``"root://server//dir/*.root"``.
+    tree_name:
+        Name of the TTree that must be present in each file.
+    workers:
+        Number of parallel threads for per-file metadata checks.
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``path``: echoed input path
+    - ``tree_name``: echoed tree name
+    - ``file_paths``: sorted list of file paths that contain *tree_name*
+    - ``n_files``: ``len(file_paths)``
+    - ``n_files_missing_tree``: files that exist but lack *tree_name*
+    - ``missing_tree_files``: list of those file paths
+    - ``elapsed_s``: wall-clock seconds
+    """
+    t0 = time.perf_counter()
+    candidates = _candidate_paths(path)
+
+    file_paths: list[str] = []
+    missing_tree_files: list[str] = []
+
+    def _check(fp: str) -> tuple[str, str]:
+        """Return (fp, "ok" | "missing" | "error")."""
+        try:
+            with _open_file(fp) as f:
+                f[tree_name]  # metadata-only open
+            return fp, "ok"
+        except KeyError:
+            return fp, "missing"
+        except Exception:
+            return fp, "error"
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for fp, status in executor.map(_check, candidates):
+            if status == "ok":
+                file_paths.append(fp)
+            elif status == "missing":
+                missing_tree_files.append(fp)
+            # "error" → skip silently
+
+    file_paths.sort()
+    missing_tree_files.sort()
+
+    return {
+        "path": path,
+        "tree_name": tree_name,
+        "file_paths": file_paths,
+        "n_files": len(file_paths),
+        "n_files_missing_tree": len(missing_tree_files),
+        "missing_tree_files": missing_tree_files,
+        "elapsed_s": round(time.perf_counter() - t0, 6),
+    }
+
+
+def validate_dataset_schema(
+    file_paths: list[str],
+    tree_name: str,
+    branches: list[str],
+    *,
+    workers: int = 4,
+) -> DatasetSchemaResult:
+    """Verify that all files contain the expected TTree and branches.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to check.
+    tree_name:
+        Name of the TTree that must be present in every file.
+    branches:
+        Branch names that must exist in the tree.
+    workers:
+        Number of parallel threads for per-file metadata reads.
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``compatible``: ``True`` if every file is readable and has all branches
+    - ``n_files``: total files checked
+    - ``n_files_ok``: files with tree and all requested branches present
+    - ``n_files_failed``: files that could not be opened or lacked the tree
+    - ``total_entries``: sum of ``num_entries`` across all ok files
+    - ``missing_branch_files``: ``{branch_name: [file, ...]}`` for branches
+      absent in at least one file
+    - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
+    - ``elapsed_s``: wall-clock seconds
+    """
+    t0 = time.perf_counter()
+
+    # Per-file result: (fp, entries | None, missing_branches, error_msg | None)
+    PerFileResult = tuple[str, int | None, list[str], str | None]
+
+    def _check(fp: str) -> PerFileResult:
+        try:
+            with _open_file(fp) as f:
+                tree = f[tree_name]
+                available = set(tree.keys())
+                entries = int(tree.num_entries)
+                missing = [b for b in branches if b not in available]
+                return fp, entries, missing, None
+        except Exception as exc:
+            return fp, None, [], str(exc)
+
+    per_file: list[PerFileResult] = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        per_file = list(executor.map(_check, file_paths))
+
+    total_entries = 0
+    n_files_ok = 0
+    n_files_failed = 0
+    failed_files: list[dict[str, str]] = []
+    missing_branch_files: dict[str, list[str]] = {}
+
+    for fp, entries, missing, error in per_file:
+        if error is not None:
+            n_files_failed += 1
+            failed_files.append({"file": fp, "error": error})
+        else:
+            assert entries is not None
+            total_entries += entries
+            if missing:
+                for b in missing:
+                    missing_branch_files.setdefault(b, []).append(fp)
+                # still counts as "processed" but not fully ok
+            else:
+                n_files_ok += 1
+
+    # Sort for determinism
+    for lst in missing_branch_files.values():
+        lst.sort()
+
+    compatible = n_files_failed == 0 and len(missing_branch_files) == 0
+
+    return {
+        "compatible": compatible,
+        "n_files": len(file_paths),
+        "n_files_ok": n_files_ok,
+        "n_files_failed": n_files_failed,
+        "total_entries": total_entries,
+        "missing_branch_files": missing_branch_files,
+        "failed_files": failed_files,
+        "elapsed_s": round(time.perf_counter() - t0, 6),
+    }
