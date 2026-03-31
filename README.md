@@ -25,6 +25,8 @@ integration.
 ```bash
 git clone https://github.com/eic/uproot-mcp-server.git
 cd uproot-mcp-server
+python -m venv .venv
+source .venv/bin/activate   # On Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
@@ -49,6 +51,7 @@ pip install -e ".[xrootd]"
 ### Starting the server (stdio transport)
 
 ```bash
+source .venv/bin/activate   # On Windows: .venv\Scripts\activate
 python -m uproot_mcp_server.server
 # or, after pip install:
 uproot-mcp-server
@@ -56,17 +59,21 @@ uproot-mcp-server
 
 ### MCP client configuration
 
-Add to your MCP client configuration file (e.g. Claude Desktop):
+Add to your MCP client configuration file (e.g. Claude Desktop), using the full path
+to the executable inside the virtual environment:
 
 ```json
 {
   "mcpServers": {
     "uproot": {
-      "command": "uproot-mcp-server"
+      "command": "/path/to/uproot-mcp-server/.venv/bin/uproot-mcp-server"
     }
   }
 }
 ```
+
+Replace `/path/to/uproot-mcp-server` with the absolute path to the cloned repository.
+On Windows use `.venv\Scripts\uproot-mcp-server.exe` instead.
 
 ### Available tools
 
@@ -130,6 +137,8 @@ Response includes `edges` (bin boundaries), `counts`, `underflow`, `overflow`, `
 ### Running tests
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate   # On Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
