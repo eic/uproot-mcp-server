@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""uproot MCP server.
+
+Exposes uproot-based ROOT file analysis tools over the Model Context Protocol
+(MCP).  Supports local files and XRootD URLs (``root://server//path``).
+
+Run with::
+
+    python -m uproot_mcp_server.server        # stdio transport (default)
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+
+from uproot_mcp_server import analysis
+
+# ---------------------------------------------------------------------------
+# Server setup
+# ---------------------------------------------------------------------------
+
+mcp = FastMCP(
+    name="uproot-mcp-server",
+    instructions=(
+        "An MCP server for analysing ROOT files with uproot. "
+        "Supports local paths and XRootD URLs (root://server//path). "
+        "All tools return JSON-serialisable dictionaries."
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Helper
+# ---------------------------------------------------------------------------
+
+def _json_safe(obj: Any) -> Any:
+    """Recursively convert non-JSON-serialisable values to safe equivalents."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float):
+        import math
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+    return obj
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def get_file_structure(file_path: str) -> dict[str, Any]:
+    """Return the top-level structure of a ROOT file.
+
+    Lists all keys stored in the file and provides a summary of every TTree
+    (number of entries, branches).  Useful as a first step when exploring an
+    unfamiliar file.
+
+    Parameters
+    ----------
+    file_path:
+        Local filesystem path **or** XRootD URL, e.g.
+        ``root://dtn-eic.jlab.org//path/to/file.root``.
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``file_path``: echoed input path
+    - ``keys``: list of dicts with ``name``, ``classname``, ``cycle``
+    - ``trees``: list of TTree summary dicts containing ``name``,
+      ``num_entries``, ``num_branches``, and a ``branches`` list with
+      basic per-branch metadata
+    """
+    try:
+        result = analysis.get_file_structure(file_path)
+        return _json_safe(result)
+    except Exception as exc:
+        return {"error": str(exc), "file_path": file_path}
+
+
+@mcp.tool()
+def get_tree_info(file_path: str, tree_name: str) -> dict[str, Any]:
+    """Return detailed metadata for a single TTree including all branches and leaves.
+
+    Parameters
+    ----------
+    file_path:
+        Local path or XRootD URL to the ROOT file.
+    tree_name:
+        Name of the TTree to inspect (e.g. ``"events"`` or ``"events;1"``).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``file_path``, ``tree_name``, ``title``
+    - ``num_entries``: total number of entries in the tree
+    - ``num_branches``: number of top-level branches
+    - ``branches``: list of branch dicts, each containing:
+        - ``name``, ``typename``
+        - ``num_entries``
+        - ``uncompressed_bytes``, ``compressed_bytes``, ``compression_ratio``
+        - ``leaves``: list of leaf dicts (``name``, ``typename``)
+    """
+    try:
+        result = analysis.get_tree_info(file_path, tree_name)
+        return _json_safe(result)
+    except Exception as exc:
+        return {"error": str(exc), "file_path": file_path, "tree_name": tree_name}
+
+
+@mcp.tool()
+def get_branch_statistics(
+    file_path: str,
+    tree_name: str,
+    branch_name: str,
+    cut: str | None = None,
+    entry_start: int | None = None,
+    entry_stop: int | None = None,
+) -> dict[str, Any]:
+    """Compute summary statistics for a single branch.
+
+    The branch values are read into a flat array (variable-length branches
+    are flattened) and summary statistics are computed over finite values.
+
+    Parameters
+    ----------
+    file_path:
+        Local path or XRootD URL to the ROOT file.
+    tree_name:
+        Name of the TTree.
+    branch_name:
+        Fully-qualified branch name (e.g. ``"MCParticles.momentum.x"``).
+    cut:
+        Optional selection expression evaluated per entry
+        (e.g. ``"MCParticles.charge != 0"``).
+        Only entries where the expression is True are included.
+    entry_start, entry_stop:
+        Integer indices to slice the tree (Python-style).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``count``: number of finite values
+    - ``mean``, ``std``, ``min``, ``max``
+    - ``p25``, ``p50``, ``p75``: 25th, 50th, 75th percentiles
+    - ``num_nan``, ``num_inf``: counts of non-finite values
+    - ``file_path``, ``tree_name``, ``branch_name``, ``cut``
+    """
+    try:
+        result = analysis.get_branch_statistics(
+            file_path,
+            tree_name,
+            branch_name,
+            cut=cut,
+            entry_start=entry_start,
+            entry_stop=entry_stop,
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_path": file_path,
+            "tree_name": tree_name,
+            "branch_name": branch_name,
+        }
+
+
+@mcp.tool()
+def histogram_branch(
+    file_path: str,
+    tree_name: str,
+    branch_name: str,
+    bins: int = 100,
+    range_min: float | None = None,
+    range_max: float | None = None,
+    cut: str | None = None,
+    entry_start: int | None = None,
+    entry_stop: int | None = None,
+) -> dict[str, Any]:
+    """Histogram a branch with an optional selection cut.
+
+    Produces a 1-D histogram of the requested branch values.  The result can
+    be used directly for plotting or further analysis by the client.
+
+    Parameters
+    ----------
+    file_path:
+        Local path or XRootD URL to the ROOT file.
+    tree_name:
+        Name of the TTree.
+    branch_name:
+        Branch to histogram (e.g. ``"MCParticles.momentum.x"``).
+    bins:
+        Number of histogram bins (default 100, must be >= 1).
+    range_min, range_max:
+        Explicit histogram range.  Both must be given together or both omitted
+        (auto-range from data).
+    cut:
+        Optional boolean selection expression
+        (e.g. ``"MCParticles.charge != 0"``).
+    entry_start, entry_stop:
+        Integer indices to slice the tree.
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``edges``: list of ``bins + 1`` bin-edge values
+    - ``counts``: list of ``bins`` bin counts
+    - ``underflow``, ``overflow``: entries outside the histogram range
+    - ``entries``: total finite entries histogrammed
+    - ``mean``, ``std``: statistics of histogrammed values
+    - ``range_min``, ``range_max``: actual histogram range used
+    - ``bins``, ``file_path``, ``tree_name``, ``branch_name``, ``cut``
+    """
+    try:
+        result = analysis.histogram_branch(
+            file_path,
+            tree_name,
+            branch_name,
+            bins=bins,
+            range_min=range_min,
+            range_max=range_max,
+            cut=cut,
+            entry_start=entry_start,
+            entry_stop=entry_stop,
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_path": file_path,
+            "tree_name": tree_name,
+            "branch_name": branch_name,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """Run the MCP server using stdio transport."""
+    mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
