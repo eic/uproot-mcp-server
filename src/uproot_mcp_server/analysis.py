@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import awkward as ak
 import numpy as np
 import uproot
 
@@ -27,6 +28,21 @@ TreeInfo = dict[str, Any]
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _flatten_to_float(data: Any) -> np.ndarray:
+    """Flatten any uproot-returned array to a 1-D float64 numpy array.
+
+    Handles both regular numpy arrays and jagged/variable-length Awkward
+    arrays by using ``ak.flatten`` before converting to numpy.
+    """
+    if isinstance(data, ak.Array):
+        return ak.to_numpy(ak.flatten(data, axis=None)).astype(float)
+    arr = np.asarray(data)
+    if arr.dtype == object:
+        # Object array likely contains sub-arrays (jagged); flatten via awkward
+        return ak.to_numpy(ak.flatten(ak.Array(arr), axis=None)).astype(float)
+    return arr.ravel().astype(float)
+
 
 def _open_file(file_path: str) -> uproot.ReadOnlyFile:
     """Open a ROOT file at *file_path*.
@@ -106,6 +122,8 @@ def get_file_structure(file_path: str) -> FileStructure:
                     trees.append(
                         {
                             "name": base_name,
+                            "key_name": key_name,
+                            "cycle": int(cycle_str),
                             "classname": key_class,
                             "num_entries": int(tree.num_entries),
                             "num_branches": len(tree.keys()),
@@ -119,6 +137,8 @@ def get_file_structure(file_path: str) -> FileStructure:
                     trees.append(
                         {
                             "name": base_name,
+                            "key_name": key_name,
+                            "cycle": int(cycle_str),
                             "classname": key_class,
                             "error": str(exc),
                         }
@@ -208,15 +228,15 @@ def get_branch_statistics(
             arrays = tree.arrays(
                 [branch_name],
                 cut=cut,
-                library="np",
+                library="ak",
                 **read_kwargs,
             )
-            data: np.ndarray = arrays[branch_name]
+            data_raw: Any = arrays[branch_name]
         else:
-            data = tree[branch_name].array(library="np", **read_kwargs)
+            data_raw = tree[branch_name].array(library="ak", **read_kwargs)
 
-        # Flatten to 1-D (handles variable-length arrays)
-        data = np.asarray(data).ravel().astype(float)
+        # Flatten to 1-D float64 (handles both fixed-size and jagged branches)
+        data = _flatten_to_float(data_raw)
 
         num_nan = int(np.sum(np.isnan(data)))
         num_inf = int(np.sum(np.isinf(data)))
@@ -329,14 +349,15 @@ def histogram_branch(
             arrays = tree.arrays(
                 [branch_name],
                 cut=cut,
-                library="np",
+                library="ak",
                 **read_kwargs,
             )
-            data: np.ndarray = arrays[branch_name]
+            data_raw: Any = arrays[branch_name]
         else:
-            data = tree[branch_name].array(library="np", **read_kwargs)
+            data_raw = tree[branch_name].array(library="ak", **read_kwargs)
 
-        data = np.asarray(data).ravel().astype(float)
+        # Flatten to 1-D float64 (handles both fixed-size and jagged branches)
+        data = _flatten_to_float(data_raw)
         finite = data[np.isfinite(data)]
 
         if len(finite) == 0:

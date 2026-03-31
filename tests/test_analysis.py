@@ -6,7 +6,7 @@ These tests run against:
    UPROOT_TEST_REMOTE_FILE environment variable is set.
 
 The local tests always run.  Remote tests are skipped when the environment
-variable is absent or when the XRootD server is unreachable.
+variable is absent.
 """
 
 from __future__ import annotations
@@ -106,9 +106,19 @@ class TestGetFileStructure:
         assert len(trees) >= 1
         tree = trees[0]
         assert "name" in tree
+        assert "key_name" in tree
+        assert "cycle" in tree
         assert "num_entries" in tree
         assert "num_branches" in tree
         assert "branches" in tree
+
+    def test_tree_cycle_and_key_name(self):
+        result = analysis.get_file_structure(LOCAL_FILE)
+        tree = result["trees"][0]
+        assert isinstance(tree["cycle"], int)
+        assert tree["cycle"] >= 1
+        assert ";" in tree["key_name"]
+        assert tree["key_name"].startswith(tree["name"])
 
     def test_num_entries_positive(self):
         result = analysis.get_file_structure(LOCAL_FILE)

@@ -28,6 +28,13 @@ cd uproot-mcp-server
 pip install -e .
 ```
 
+For XRootD remote file access (``root://server//path`` URLs), install the optional
+XRootD client:
+
+```bash
+pip install -e ".[xrootd]"
+```
+
 ### Dependencies
 
 - Python ≥ 3.10
@@ -35,6 +42,7 @@ pip install -e .
 - `numpy` ≥ 1.24
 - `awkward` ≥ 2.0
 - `mcp` ≥ 1.0
+- *(optional)* `xrootd` ≥ 5.4 — required for `root://` URLs
 
 ## Usage
 

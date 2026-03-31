@@ -21,6 +21,9 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
 ]
+xrootd = [
+    "xrootd>=5.4.0",
+]
 
 [project.scripts]
 uproot-mcp-server = "uproot_mcp_server.server:main"
