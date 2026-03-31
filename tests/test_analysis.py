@@ -864,3 +864,175 @@ class TestGetDatasetStatistics:
         result = analysis.get_dataset_statistics([LOCAL_FILE], "events", "px")
         for key in ("mean", "std", "min", "max"):
             assert _is_finite_or_none(result[key]), f"{key} not finite: {result[key]}"
+
+# ---------------------------------------------------------------------------
+# run_kernel_dataset
+# ---------------------------------------------------------------------------
+
+MOMENTUM_KERNEL = (
+    "def kernel(events):\n"
+    "    px = events['px']\n"
+    "    py = events['py']\n"
+    "    pz = events['pz']\n"
+    "    return np.sqrt(px**2 + py**2 + pz**2)\n"
+)
+
+SCALAR_KERNEL = "def kernel(events):\n    return float(np.mean(events['px']))\n"
+
+HISTOGRAM_KERNEL = (
+    "def kernel(events):\n"
+    "    counts, _ = np.histogram(events['px'], bins=100, range=(-5.0, 5.0))\n"
+    "    return {'edges': np.linspace(-5.0, 5.0, 101).tolist(), 'counts': counts.tolist()}\n"
+)
+
+
+class TestRunKernelDataset:
+    def test_array_result_two_files(self):
+        """Using the same file twice should give 2× total entries."""
+        result = analysis.run_kernel_dataset(
+            [LOCAL_FILE, LOCAL_FILE], "events", MOMENTUM_KERNEL,
+            ["px", "py", "pz"],
+        )
+        assert result["result_type"] == "array"
+        assert result["total"] == 2000  # 1000 entries × 2 files
+        assert result["n_files_ok"] == 2
+        assert result["n_files_failed"] == 0
+
+    def test_scalar_result_per_file_list(self):
+        result = analysis.run_kernel_dataset(
+            [LOCAL_FILE, LOCAL_FILE], "events", SCALAR_KERNEL, ["px"],
+        )
+        assert result["result_type"] == "scalar"
+        assert isinstance(result["data"], list)
+        assert len(result["data"]) == 2
+        assert "sum" in result
+        assert "mean" in result
+        assert isinstance(result["mean"], float)
+
+    def test_histogram_dict_auto_reduce(self):
+        result = analysis.run_kernel_dataset(
+            [LOCAL_FILE, LOCAL_FILE], "events", HISTOGRAM_KERNEL, ["px"],
+        )
+        assert result["result_type"] == "dict"
+        data = result["data"]
+        assert "edges" in data
+        assert "counts" in data
+        assert len(data["edges"]) == 101
+        assert len(data["counts"]) == 100
+        # Summed over two identical files: counts should be 2× single file
+        single = analysis.run_kernel(LOCAL_FILE, "events", HISTOGRAM_KERNEL, ["px"])
+        single_counts = single["data"]["counts"]
+        for got, expected in zip(data["counts"], single_counts):
+            assert got == 2 * expected
+
+    def test_entries_per_file_limits_results(self):
+        result = analysis.run_kernel_dataset(
+            [LOCAL_FILE, LOCAL_FILE], "events", MOMENTUM_KERNEL,
+            ["px", "py", "pz"], entries_per_file=10,
+        )
+        assert result["result_type"] == "array"
+        assert result["total"] == 20  # 10 entries × 2 files
+
+    def test_failed_file_recorded_and_continues(self):
+        result = analysis.run_kernel_dataset(
+            [LOCAL_FILE, "/nonexistent/file.root", LOCAL_FILE],
+            "events", MOMENTUM_KERNEL, ["px", "py", "pz"],
+        )
+        assert result["n_files_failed"] == 1
+        assert "/nonexistent/file.root" in result["failed_files"]
+        assert result["n_files_ok"] == 2
+        assert result["result_type"] == "array"
+
+    def test_elapsed_s_non_negative(self):
+        result = analysis.run_kernel_dataset(
+            [LOCAL_FILE], "events", SCALAR_KERNEL, ["px"],
+        )
+        assert result["elapsed_s"] >= 0.0
+        assert isinstance(result["elapsed_s"], float)
+        assert len(result["per_file_elapsed_s"]) == 1
+        assert result["per_file_elapsed_s"][0] >= 0.0
+
+    def test_all_files_fail_returns_empty(self):
+        result = analysis.run_kernel_dataset(
+            ["/no/file.root"], "events", SCALAR_KERNEL, ["px"],
+        )
+        assert result["result_type"] == "empty"
+        assert result["n_files_failed"] == 1
+
+    def test_reduce_code_applied(self):
+        """reduce_code is applied as a left fold: scalar + scalar = scalar sum."""
+        reduce_code = "def reduce(a, b):\n    return a + b\n"
+        single = analysis.run_kernel(LOCAL_FILE, "events", SCALAR_KERNEL, ["px"])
+        result = analysis.run_kernel_dataset(
+            [LOCAL_FILE, LOCAL_FILE], "events", SCALAR_KERNEL,
+            ["px"], reduce_code=reduce_code,
+        )
+        # Sum of two identical per-file means = 2 × single mean
+        assert result["result_type"] == "scalar"
+        assert isinstance(result["data"], float)
+        assert abs(result["data"] - 2 * single["data"]) < 1e-6
+
+    def test_json_serialisable(self):
+        import json as _json
+        result = analysis.run_kernel_dataset(
+            [LOCAL_FILE, LOCAL_FILE], "events", SCALAR_KERNEL, ["px"],
+        )
+        _json.dumps(result)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# estimate_dataset_cost
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateDatasetCost:
+    def test_returns_expected_keys(self):
+        result = analysis.estimate_dataset_cost(
+            [LOCAL_FILE, LOCAL_FILE, LOCAL_FILE],
+            "events", SCALAR_KERNEL, ["px"],
+        )
+        for key in (
+            "n_files", "total_entries", "sample_files_used",
+            "entries_per_second", "estimated_total_seconds",
+            "recommended_prototype_entries_per_file",
+            "sample_elapsed_s", "elapsed_s",
+        ):
+            assert key in result, f"missing key: {key}"
+
+    def test_estimated_total_seconds_positive(self):
+        result = analysis.estimate_dataset_cost(
+            [LOCAL_FILE, LOCAL_FILE, LOCAL_FILE],
+            "events", SCALAR_KERNEL, ["px"],
+        )
+        assert result["estimated_total_seconds"] > 0
+
+    def test_entries_per_second_positive(self):
+        result = analysis.estimate_dataset_cost(
+            [LOCAL_FILE, LOCAL_FILE, LOCAL_FILE],
+            "events", SCALAR_KERNEL, ["px"],
+        )
+        assert result["entries_per_second"] > 0
+
+    def test_elapsed_s_non_negative(self):
+        result = analysis.estimate_dataset_cost(
+            [LOCAL_FILE, LOCAL_FILE, LOCAL_FILE],
+            "events", SCALAR_KERNEL, ["px"],
+        )
+        assert result["elapsed_s"] >= 0.0
+        assert result["sample_elapsed_s"] >= 0.0
+
+    def test_n_files_and_total_entries(self):
+        result = analysis.estimate_dataset_cost(
+            [LOCAL_FILE, LOCAL_FILE],
+            "events", SCALAR_KERNEL, ["px"],
+        )
+        assert result["n_files"] == 2
+        assert result["total_entries"] == 2000  # 1000 × 2
+
+    def test_sample_files_capped_at_n_files(self):
+        result = analysis.estimate_dataset_cost(
+            [LOCAL_FILE],
+            "events", SCALAR_KERNEL, ["px"],
+            sample_files=10,
+        )
+        assert result["sample_files_used"] == 1

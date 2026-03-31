@@ -1191,3 +1191,310 @@ def get_dataset_statistics(
         "failed_files": failed_files,
         "elapsed_s": elapsed_s,
     }
+
+# ---------------------------------------------------------------------------
+# Dataset kernel execution helpers
+# ---------------------------------------------------------------------------
+
+
+def _is_histogram_dict(result: Any) -> bool:
+    """Return True if *result* looks like a histogram dict ``{"edges", "counts"}``."""
+    if not isinstance(result, dict):
+        return False
+    if "edges" not in result or "counts" not in result:
+        return False
+    counts = result["counts"]
+    edges = result["edges"]
+    if not hasattr(counts, "__len__") or not hasattr(edges, "__len__"):
+        return False
+    if len(edges) != len(counts) + 1:
+        return False
+    # Verify counts contains numbers
+    if isinstance(counts, np.ndarray):
+        return True
+    if isinstance(counts, (list, tuple)) and counts:
+        return isinstance(counts[0], (int, float))
+    return False
+
+
+def run_kernel_dataset(
+    file_paths: list[str],
+    tree_name: str,
+    kernel_code: str,
+    branches: list[str],
+    *,
+    reduce_code: str | None = None,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+    page: int = 0,
+    page_size: int = 1000,
+) -> KernelResult:
+    """Run a sandboxed kernel over multiple files and auto-reduce the results.
+
+    The kernel is compiled once, then executed per-file in a RestrictedPython
+    subprocess.  Partial results are accumulated and reduced automatically
+    based on the result type of the first successful file.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    kernel_code:
+        Python source defining ``def kernel(events): ...``.
+    branches:
+        Branch names to load and pass into ``events``.
+    reduce_code:
+        Optional Python source defining ``def reduce(a, b): ...``.
+        Applied as a left fold over partial results.  If omitted, an
+        automatic reduction strategy is chosen based on the result type.
+    cut:
+        Optional boolean selection expression applied per file.
+    entries_per_file:
+        Maximum entries to read per file (``None`` reads all).
+    workers:
+        Reserved for future parallel execution (currently unused).
+    page:
+        0-indexed page for array results (default 0).
+    page_size:
+        Elements per page for array results (default 1000).
+
+    Returns
+    -------
+    dict
+        Contains ``result_type``, ``data``, and dataset-level metadata:
+        ``n_files``, ``n_files_ok``, ``n_files_failed``, ``failed_files``,
+        ``per_file_elapsed_s``, ``elapsed_s``.
+        Array results additionally include pagination fields.
+        Scalar results include ``sum`` and ``mean`` over per-file values.
+    """
+    if page < 0:
+        raise ValueError(f"page must be >= 0, got {page}")
+    if page_size < 1:
+        raise ValueError(f"page_size must be >= 1, got {page_size}")
+
+    from uproot_mcp_server.sandbox import compile_kernel  # noqa: PLC0415
+    from uproot_mcp_server.sandbox import execute_kernel as _execute_kernel  # noqa: PLC0415
+
+    # Compile once — catches errors before touching any files
+    code_obj = compile_kernel(kernel_code)
+
+    reduce_code_obj = None
+    if reduce_code is not None:
+        reduce_code_obj = compile_kernel(reduce_code)
+
+    t_total_start = time.perf_counter()
+    partial_results: list[Any] = []
+    per_file_elapsed_s: list[float] = []
+    failed_files: list[str] = []
+
+    for fp in file_paths:
+        t_file = time.perf_counter()
+        try:
+            with _open_file(fp) as f:
+                tree = f[tree_name]
+                read_kwargs: dict[str, Any] = {}
+                if entries_per_file is not None:
+                    read_kwargs["entry_stop"] = entries_per_file
+                arrays_kwargs: dict[str, Any] = dict(read_kwargs)
+                if cut:
+                    arrays_kwargs["cut"] = cut
+                arrays_ak = tree.arrays(branches, library="ak", **arrays_kwargs)
+                branches_data: dict[str, Any] = {b: arrays_ak[b] for b in branches}
+            result = _execute_kernel(code_obj, branches_data)
+            partial_results.append(result)
+        except Exception:  # noqa: BLE001
+            failed_files.append(fp)
+        per_file_elapsed_s.append(time.perf_counter() - t_file)
+
+    elapsed_s = time.perf_counter() - t_total_start
+
+    meta: dict[str, Any] = {
+        "file_paths": file_paths,
+        "tree_name": tree_name,
+        "branches": branches,
+        "cut": cut,
+        "entries_per_file": entries_per_file,
+        "n_files": len(file_paths),
+        "n_files_ok": len(partial_results),
+        "n_files_failed": len(failed_files),
+        "failed_files": failed_files,
+        "per_file_elapsed_s": per_file_elapsed_s,
+        "elapsed_s": elapsed_s,
+    }
+
+    if not partial_results:
+        return {"result_type": "empty", "data": None, **meta}
+
+    # --- Custom reduce_code: left fold ---
+    if reduce_code_obj is not None:
+        from uproot_mcp_server.sandbox import execute_reduce as _execute_reduce  # noqa: PLC0415
+        reduced: Any = partial_results[0]
+        for r in partial_results[1:]:
+            reduced = _execute_reduce(reduce_code_obj, reduced, r)
+        # Format the single reduced result
+        if isinstance(reduced, (ak.Array, np.ndarray)):
+            flat = (
+                ak.to_numpy(ak.flatten(reduced, axis=None)).astype(float)
+                if isinstance(reduced, ak.Array)
+                else reduced.ravel().astype(float)
+            )
+            return _paginate(flat, page, page_size, "array", meta)
+        if isinstance(reduced, (list, tuple)):
+            return _paginate(list(reduced), page, page_size, "array", meta)
+        if isinstance(reduced, dict):
+            return {"result_type": "dict", "data": _normalize_json(reduced), **meta}
+        return {"result_type": "scalar", "data": _normalize_json(reduced), **meta}
+
+    # --- Auto-reduce based on first result type ---
+    first = partial_results[0]
+
+    if isinstance(first, (ak.Array, np.ndarray)):
+        arrays: list[np.ndarray] = []
+        for r in partial_results:
+            if isinstance(r, ak.Array):
+                arrays.append(
+                    ak.to_numpy(ak.flatten(r, axis=None)).astype(float)
+                )
+            elif isinstance(r, np.ndarray):
+                arrays.append(r.ravel().astype(float))
+            else:
+                arrays.append(np.asarray(r, dtype=float).ravel())
+        combined = np.concatenate(arrays)
+        return _paginate(combined, page, page_size, "array", meta)
+
+    if isinstance(first, (list, tuple)):
+        combined_list: list[Any] = []
+        for r in partial_results:
+            combined_list.extend(r)
+        return _paginate(combined_list, page, page_size, "array", meta)
+
+    if isinstance(first, dict) and _is_histogram_dict(first):
+        edges = (
+            first["edges"].tolist()
+            if isinstance(first["edges"], np.ndarray)
+            else list(first["edges"])
+        )
+        total_counts = np.zeros(len(first["counts"]), dtype=np.int64)
+        for r in partial_results:
+            c = r["counts"]
+            total_counts += np.asarray(c, dtype=np.int64)
+        return {
+            "result_type": "dict",
+            "data": {"edges": edges, "counts": total_counts.tolist()},
+            **meta,
+        }
+
+    if isinstance(first, dict):
+        return {
+            "result_type": "dict",
+            "data": [_normalize_json(r) for r in partial_results],
+            **meta,
+        }
+
+    # Scalar (int/float/numpy scalar)
+    scalars = [_normalize_json(r) for r in partial_results]
+    finite_scalars = [s for s in scalars if isinstance(s, (int, float))]
+    scalar_sum: Any = sum(finite_scalars) if finite_scalars else None
+    scalar_mean: Any = scalar_sum / len(finite_scalars) if finite_scalars else None
+    return {
+        "result_type": "scalar",
+        "data": scalars,
+        "sum": scalar_sum,
+        "mean": scalar_mean,
+        **meta,
+    }
+
+
+def estimate_dataset_cost(
+    file_paths: list[str],
+    tree_name: str,
+    kernel_code: str,
+    branches: list[str],
+    *,
+    sample_files: int = 3,
+    entries_per_file: int = 1000,
+) -> dict[str, Any]:
+    """Measure kernel performance on a sample and extrapolate to the full dataset.
+
+    Opens each file metadata-only to count total entries, then times the kernel
+    on a small sample to produce a cost estimate.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    kernel_code:
+        Python source defining ``def kernel(events): ...``.
+    branches:
+        Branch names required by the kernel.
+    sample_files:
+        Number of files to sample (default 3).
+    entries_per_file:
+        Maximum entries per sample file (default 1000).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``n_files``: total number of files in the dataset
+    - ``total_entries``: sum of all ``num_entries`` across files
+    - ``sample_files_used``: number of files actually sampled
+    - ``entries_per_second``: throughput measured on the sample
+    - ``estimated_total_seconds``: extrapolated wall time for the full dataset
+    - ``recommended_prototype_entries_per_file``: entries per file that keeps a
+      full-dataset run under 30 s
+    - ``sample_elapsed_s``: wall time for all sample kernel executions
+    - ``elapsed_s``: total wall time including metadata reads
+    """
+    t_start = time.perf_counter()
+
+    # Step 1: metadata-only total entry count
+    total_entries = 0
+    for fp in file_paths:
+        with _open_file(fp) as f:
+            total_entries += int(f[tree_name].num_entries)
+
+    n_files = len(file_paths)
+    n_sample = min(sample_files, n_files)
+    sample_file_paths = file_paths[:n_sample]
+
+    # Step 2: time kernel on sample files
+    sample_entries = 0
+    t_sample_start = time.perf_counter()
+    for fp in sample_file_paths:
+        with _open_file(fp) as f:
+            actual = int(f[tree_name].num_entries)
+        entries_this_file = min(entries_per_file, actual)
+        sample_entries += entries_this_file
+        run_kernel(fp, tree_name, kernel_code, branches, entry_stop=entries_per_file)
+    sample_elapsed_s = time.perf_counter() - t_sample_start
+
+    elapsed_s = time.perf_counter() - t_start
+
+    entries_per_second = (
+        sample_entries / sample_elapsed_s if sample_elapsed_s > 0 else float("inf")
+    )
+    estimated_total_seconds = (
+        total_entries / entries_per_second if entries_per_second > 0 else float("inf")
+    )
+    recommended = (
+        max(1, int(30 * entries_per_second / n_files))
+        if n_files > 0 and math.isfinite(entries_per_second)
+        else 1
+    )
+
+    return {
+        "n_files": n_files,
+        "total_entries": total_entries,
+        "sample_files_used": n_sample,
+        "entries_per_second": entries_per_second,
+        "estimated_total_seconds": estimated_total_seconds,
+        "recommended_prototype_entries_per_file": recommended,
+        "sample_elapsed_s": sample_elapsed_s,
+        "elapsed_s": elapsed_s,
+    }

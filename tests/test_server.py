@@ -381,3 +381,98 @@ class TestServerGetDatasetStatistics:
         json_str = json.dumps(result)
         assert "NaN" not in json_str
         assert "Infinity" not in json_str
+
+# ---------------------------------------------------------------------------
+# execute_kernel_dataset
+# ---------------------------------------------------------------------------
+
+_SCALAR_KERNEL = "def kernel(events):\n    return float(np.mean(events['px']))\n"
+_MOMENTUM_KERNEL = (
+    "def kernel(events):\n"
+    "    px = events['px']\n"
+    "    py = events['py']\n"
+    "    pz = events['pz']\n"
+    "    return np.sqrt(px**2 + py**2 + pz**2)\n"
+)
+
+
+class TestServerExecuteKernelDataset:
+    def test_returns_json_serialisable(self):
+        result = server.execute_kernel_dataset(
+            [LOCAL_FILE, LOCAL_FILE], "events", _MOMENTUM_KERNEL,
+            ["px", "py", "pz"],
+        )
+        assert _is_json_serialisable(result)
+
+    def test_array_result(self):
+        result = server.execute_kernel_dataset(
+            [LOCAL_FILE, LOCAL_FILE], "events", _MOMENTUM_KERNEL,
+            ["px", "py", "pz"],
+        )
+        assert "error" not in result
+        assert result["result_type"] == "array"
+        assert result["total"] == 2000
+
+    def test_failed_file_returns_error_key_in_list(self):
+        result = server.execute_kernel_dataset(
+            ["/nonexistent.root"], "events", _SCALAR_KERNEL, ["px"],
+        )
+        # All files fail → result_type "empty", no exception
+        assert "error" not in result
+        assert result["n_files_failed"] == 1
+
+    def test_bad_kernel_returns_error_key(self):
+        # RestrictedPython blocks import at runtime; the file fails gracefully
+        result = server.execute_kernel_dataset(
+            [LOCAL_FILE], "events",
+            "def kernel(events):\n    import os\n",
+            ["px"],
+        )
+        # Compile may succeed but execute fails per-file: n_files_failed > 0
+        assert "error" in result or result.get("n_files_failed", 0) > 0
+
+    def test_no_inf_or_nan(self):
+        result = server.execute_kernel_dataset(
+            [LOCAL_FILE], "events", _SCALAR_KERNEL, ["px"],
+        )
+        json_str = json.dumps(result)
+        assert "Infinity" not in json_str
+        assert "NaN" not in json_str
+
+
+# ---------------------------------------------------------------------------
+# estimate_dataset_cost
+# ---------------------------------------------------------------------------
+
+
+class TestServerEstimateDatasetCost:
+    def test_returns_json_serialisable(self):
+        result = server.estimate_dataset_cost(
+            [LOCAL_FILE, LOCAL_FILE, LOCAL_FILE],
+            "events", _SCALAR_KERNEL, ["px"],
+        )
+        assert _is_json_serialisable(result)
+
+    def test_returns_expected_keys(self):
+        result = server.estimate_dataset_cost(
+            [LOCAL_FILE, LOCAL_FILE],
+            "events", _SCALAR_KERNEL, ["px"],
+        )
+        assert "error" not in result
+        for key in ("n_files", "total_entries", "entries_per_second",
+                    "estimated_total_seconds", "sample_elapsed_s"):
+            assert key in result
+
+    def test_bad_kernel_returns_error_key(self):
+        result = server.estimate_dataset_cost(
+            [LOCAL_FILE], "events",
+            "def kernel(events):\n    import os\n",
+            ["px"],
+        )
+        assert "error" in result
+
+    def test_nonexistent_file_returns_error_key(self):
+        result = server.estimate_dataset_cost(
+            ["/nonexistent.root"], "events", _SCALAR_KERNEL, ["px"],
+        )
+        assert "error" in result
