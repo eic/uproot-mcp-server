@@ -322,6 +322,143 @@ def execute_kernel(
         }
 
 
+@mcp.tool()
+def histogram_dataset(
+    file_paths: list[str],
+    tree_name: str,
+    branch_name: str,
+    range_min: float,
+    range_max: float,
+    bins: int = 100,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+) -> dict[str, Any]:
+    """Accumulate a 1-D histogram across many ROOT files.
+
+    Streams data from each file independently, accumulating counts into a
+    fixed-range histogram.  Memory usage scales with ``bins``, not with the
+    total number of events.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    branch_name:
+        Branch to histogram (e.g. ``"MCParticles.momentum.x"``).
+    range_min:
+        Lower edge of the histogram range (required).
+    range_max:
+        Upper edge of the histogram range (required).
+    bins:
+        Number of histogram bins (default 100, must be >= 1).
+    cut:
+        Optional boolean selection expression applied per entry.
+    entries_per_file:
+        If set, read at most this many entries per file (useful for prototyping).
+    workers:
+        Number of threads for parallel file I/O (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``edges``: list of ``bins + 1`` bin-edge values
+    - ``counts``: list of accumulated bin counts
+    - ``underflow``, ``overflow``: entries outside the histogram range
+    - ``entries``: total finite entries histogrammed
+    - ``mean``, ``std``: weighted statistics from bin centres (``None`` if empty)
+    - ``range_min``, ``range_max``, ``bins``
+    - ``file_paths``, ``tree_name``, ``branch_name``, ``cut``
+    - ``n_files``, ``n_files_ok``, ``n_files_failed``
+    - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
+    - ``elapsed_s``: total wall time in seconds
+    """
+    try:
+        result = analysis.histogram_dataset(
+            file_paths,
+            tree_name,
+            branch_name,
+            bins=bins,
+            range_min=range_min,
+            range_max=range_max,
+            cut=cut,
+            entries_per_file=entries_per_file,
+            workers=workers,
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_paths": file_paths,
+            "tree_name": tree_name,
+            "branch_name": branch_name,
+        }
+
+
+@mcp.tool()
+def get_dataset_statistics(
+    file_paths: list[str],
+    tree_name: str,
+    branch_name: str,
+    cut: str | None = None,
+    entries_per_file: int | None = None,
+    workers: int = 4,
+) -> dict[str, Any]:
+    """Compute mean/std/min/max across many ROOT files using Welford's algorithm.
+
+    Processes files in parallel using a thread pool and combines partial
+    statistics with the parallel Welford algorithm.  Percentiles (p25, p50,
+    p75) are not computable in streaming mode and are returned as ``None``.
+
+    Parameters
+    ----------
+    file_paths:
+        List of local paths or XRootD URLs to ROOT files.
+    tree_name:
+        Name of the TTree in each file.
+    branch_name:
+        Branch to compute statistics for.
+    cut:
+        Optional boolean selection expression applied per entry.
+    entries_per_file:
+        If set, read at most this many entries per file (useful for prototyping).
+    workers:
+        Number of threads for parallel file I/O (default 4).
+
+    Returns
+    -------
+    dict with keys:
+
+    - ``count``, ``mean``, ``std``, ``min``, ``max``
+    - ``p25``, ``p50``, ``p75``: always ``None`` (streaming mode limitation)
+    - ``num_nan``, ``num_inf``
+    - ``file_paths``, ``tree_name``, ``branch_name``, ``cut``
+    - ``n_files``, ``n_files_ok``, ``n_files_failed``
+    - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
+    - ``elapsed_s``: total wall time in seconds
+    """
+    try:
+        result = analysis.get_dataset_statistics(
+            file_paths,
+            tree_name,
+            branch_name,
+            cut=cut,
+            entries_per_file=entries_per_file,
+            workers=workers,
+        )
+        return _json_safe(result)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "file_paths": file_paths,
+            "tree_name": tree_name,
+            "branch_name": branch_name,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
