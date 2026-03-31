@@ -49,6 +49,12 @@ class TestServerGetFileStructure:
         assert "error" in result
         assert isinstance(result["error"], str)
 
+    def test_elapsed_s(self):
+        result = server.get_file_structure(LOCAL_FILE)
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
 
 # ---------------------------------------------------------------------------
 # get_tree_info
@@ -96,6 +102,12 @@ class TestServerGetBranchStatistics:
         result = server.get_branch_statistics(LOCAL_FILE, "events", "no_branch")
         assert "error" in result
 
+    def test_elapsed_s(self):
+        result = server.get_branch_statistics(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
     def test_no_inf_or_nan_in_output(self):
         result = server.get_branch_statistics(LOCAL_FILE, "events", "px")
         json_str = json.dumps(result)
@@ -141,6 +153,12 @@ class TestServerHistogramBranch:
         result = server.histogram_branch(LOCAL_FILE, "events", "px", bins=100)
         total = sum(result["counts"]) + result["underflow"] + result["overflow"]
         assert total == result["entries"]
+
+    def test_elapsed_s(self):
+        result = server.histogram_branch(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
 
     def test_no_inf_or_nan_in_output(self):
         result = server.histogram_branch(LOCAL_FILE, "events", "px", bins=100)

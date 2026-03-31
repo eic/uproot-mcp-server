@@ -8,6 +8,7 @@ All public functions return plain Python dicts suitable for JSON serialization.
 from __future__ import annotations
 
 import math
+import time
 from typing import Any
 
 import awkward as ak
@@ -100,7 +101,9 @@ def get_file_structure(file_path: str) -> FileStructure:
     - ``file_path``: the path as given
     - ``keys``: list of top-level key dicts (name, classname, cycle)
     - ``trees``: list of tree summary dicts for each TTree found at the top level
+    - ``elapsed_s``: wall-clock seconds for the operation
     """
+    t0 = time.perf_counter()
     with _open_file(file_path) as f:
         keys: list[dict[str, Any]] = []
         trees: list[dict[str, Any]] = []
@@ -145,11 +148,13 @@ def get_file_structure(file_path: str) -> FileStructure:
                         }
                     )
 
-        return {
+        result: FileStructure = {
             "file_path": file_path,
             "keys": keys,
             "trees": trees,
         }
+    result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+    return result
 
 
 def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
@@ -162,7 +167,9 @@ def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
     - ``branches``: list of branch dicts (name, typename, num_entries,
       uncompressed_bytes, compressed_bytes, compression_ratio, leaves)
     - ``title``: tree title if available
+    - ``elapsed_s``: wall-clock seconds for the operation
     """
+    t0 = time.perf_counter()
     with _open_file(file_path) as f:
         tree = f[tree_name]
 
@@ -174,7 +181,7 @@ def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
 
         branches = [_branch_info(tree[b]) for b in tree.keys()]
 
-        return {
+        result: TreeInfo = {
             "file_path": file_path,
             "tree_name": tree.name,
             "title": title,
@@ -182,6 +189,8 @@ def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
             "num_branches": len(branches),
             "branches": branches,
         }
+    result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+    return result
 
 
 def get_branch_statistics(
@@ -214,7 +223,9 @@ def get_branch_statistics(
     - ``count``, ``mean``, ``std``, ``min``, ``max``, ``p25``, ``p50``, ``p75``
     - ``num_nan``, ``num_inf``  (counts of non-finite values)
     - metadata: ``file_path``, ``tree_name``, ``branch_name``, ``cut``
+    - ``elapsed_s``: wall-clock seconds for the operation
     """
+    t0 = time.perf_counter()
     with _open_file(file_path) as f:
         tree = f[tree_name]
 
@@ -244,7 +255,7 @@ def get_branch_statistics(
         finite = data[np.isfinite(data)]
 
         if len(finite) == 0:
-            return {
+            result: BranchStatistics = {
                 "file_path": file_path,
                 "tree_name": tree_name,
                 "branch_name": branch_name,
@@ -260,6 +271,8 @@ def get_branch_statistics(
                 "num_nan": num_nan,
                 "num_inf": num_inf,
             }
+            result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+            return result
 
         percentiles = np.percentile(finite, [25, 50, 75])
 
@@ -268,7 +281,7 @@ def get_branch_statistics(
                 return None
             return float(v)
 
-        return {
+        result = {
             "file_path": file_path,
             "tree_name": tree_name,
             "branch_name": branch_name,
@@ -284,6 +297,8 @@ def get_branch_statistics(
             "num_nan": num_nan,
             "num_inf": num_inf,
         }
+        result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+        return result
 
 
 def histogram_branch(
@@ -337,6 +352,7 @@ def histogram_branch(
             f"(got range_min={range_min}, range_max={range_max})"
         )
 
+    t0 = time.perf_counter()
     with _open_file(file_path) as f:
         tree = f[tree_name]
 
@@ -367,7 +383,7 @@ def histogram_branch(
                 edges_arr = np.linspace(range_min, range_max, bins + 1)  # type: ignore[arg-type]
             else:
                 edges_arr = np.linspace(0.0, 1.0, bins + 1)
-            return {
+            result: HistogramResult = {
                 "file_path": file_path,
                 "tree_name": tree_name,
                 "branch_name": branch_name,
@@ -383,6 +399,8 @@ def histogram_branch(
                 "mean": None,
                 "std": None,
             }
+            result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+            return result
 
         if has_min and has_max:
             hist_range = (float(range_min), float(range_max))  # type: ignore[arg-type]
@@ -400,7 +418,7 @@ def histogram_branch(
         mean = float(np.mean(finite))
         std = float(np.std(finite))
 
-        return {
+        result = {
             "file_path": file_path,
             "tree_name": tree_name,
             "branch_name": branch_name,
@@ -416,6 +434,8 @@ def histogram_branch(
             "mean": mean if math.isfinite(mean) else None,
             "std": std if math.isfinite(std) else None,
         }
+    result["elapsed_s"] = round(time.perf_counter() - t0, 6)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +563,8 @@ def run_kernel(
     if page_size < 1:
         raise ValueError(f"page_size must be >= 1, got {page_size}")
 
+    t0 = time.perf_counter()
+
     # Compile first — fast, catches errors before opening the (potentially
     # remote) file.
     from uproot_mcp_server.sandbox import compile_kernel  # noqa: PLC0415
@@ -573,7 +595,12 @@ def run_kernel(
         arrays_ak = tree.arrays(branches, library="ak", **arrays_kwargs)
         branches_data: dict[str, Any] = {b: arrays_ak[b] for b in branches}
 
+    t1 = time.perf_counter()
     result = _execute_kernel(code_obj, branches_data)
+    t2 = time.perf_counter()
+
+    kernel_elapsed_s = round(t2 - t1, 6)
+    total_elapsed_s = round(t2 - t0, 6)
 
     meta: dict[str, Any] = {
         "file_path": file_path,
@@ -584,6 +611,8 @@ def run_kernel(
         "entry_stop": entry_stop,
         "page": page,
         "page_size": page_size,
+        "elapsed_s": total_elapsed_s,
+        "kernel_elapsed_s": kernel_elapsed_s,
     }
 
     if isinstance(result, ak.Array):

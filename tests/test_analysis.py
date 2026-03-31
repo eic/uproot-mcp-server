@@ -134,6 +134,12 @@ class TestGetFileStructure:
         with pytest.raises(Exception):
             analysis.get_file_structure("/nonexistent/path/file.root")
 
+    def test_elapsed_s(self):
+        result = analysis.get_file_structure(LOCAL_FILE)
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
+
     @_remote_only
     def test_remote_file_structure(self):
         result = analysis.get_file_structure(REMOTE_FILE)
@@ -186,6 +192,12 @@ class TestGetTreeInfo:
     def test_raises_on_missing_tree(self):
         with pytest.raises(Exception):
             analysis.get_tree_info(LOCAL_FILE, "no_such_tree")
+
+    def test_elapsed_s(self):
+        result = analysis.get_tree_info(LOCAL_FILE, "events")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
 
     @_remote_only
     def test_remote_tree_info(self):
@@ -268,6 +280,12 @@ class TestGetBranchStatistics:
         # charge is in {-1, 0, 1}
         assert result["min"] >= -1
         assert result["max"] <= 1
+
+    def test_elapsed_s(self):
+        result = analysis.get_branch_statistics(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
 
     @_remote_only
     def test_remote_branch_statistics(self):
@@ -366,6 +384,12 @@ class TestHistogramBranch:
             LOCAL_FILE, "events", "px", bins=50, entry_start=0, entry_stop=500
         )
         assert result["entries"] == 500
+
+    def test_elapsed_s(self):
+        result = analysis.histogram_branch(LOCAL_FILE, "events", "px")
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert result["elapsed_s"] >= 0.0
 
     @_remote_only
     def test_remote_histogram(self):
@@ -492,3 +516,12 @@ class TestRunKernel:
         code = "def kernel(events):\n    return events['px']\n"
         result = analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
         json.dumps(result)  # must not raise
+
+    def test_elapsed_s_and_kernel_elapsed_s(self):
+        code = "def kernel(events):\n    return events['px']\n"
+        result = analysis.run_kernel(LOCAL_FILE, "events", code, ["px"])
+        assert "elapsed_s" in result
+        assert "kernel_elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+        assert isinstance(result["kernel_elapsed_s"], float)
+        assert result["elapsed_s"] >= result["kernel_elapsed_s"] >= 0.0
