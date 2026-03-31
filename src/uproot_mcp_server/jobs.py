@@ -67,7 +67,6 @@ class Job:
 # Store
 # ---------------------------------------------------------------------------
 
-_TERMINAL_STATES: frozenset[str] = frozenset({"done", "failed", "cancelled"})
 _MAX_COMPLETED: int = 20
 
 

@@ -172,7 +172,7 @@ class TestJobStore:
         """result() raises ValueError when the job is still pending/running."""
         store = JobStore(max_workers=1)
         # Occupy the worker
-        _blocker = store.submit(_slow_fn, 0.5)
+        store.submit(_slow_fn, 0.5)
         job_id = store.submit(_fast_fn)
 
         with pytest.raises(ValueError):
