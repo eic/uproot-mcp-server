@@ -278,15 +278,21 @@ class TestAsyncJobTools:
         )
         job_id = result["job_id"]
 
-        # Poll for completion
-        deadline = _time.monotonic() + 30.0
+        # Poll for completion with a short deadline to keep hangs visible
+        deadline = _time.monotonic() + 5.0
+        last_status: dict | None = None
         while _time.monotonic() < deadline:
-            s = server.get_job_status(job_id)
-            if s["status"] in ("done", "failed", "cancelled"):
+            last_status = server.get_job_status(job_id)
+            if last_status["status"] in ("done", "failed", "cancelled"):
                 break
             _time.sleep(0.1)
 
-        assert server.get_job_status(job_id)["status"] == "done"
+        if not last_status or last_status.get("status") != "done":
+            pytest.fail(
+                f"Job {job_id!r} did not reach 'done' within deadline; "
+                f"last status={last_status!r}"
+            )
+
         r = server.get_job_result(job_id)
         assert "error" not in r
         assert r["job_id"] == job_id

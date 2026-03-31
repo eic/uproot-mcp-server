@@ -172,13 +172,13 @@ class JobStore:
         """
         with self._lock:
             job = self._jobs[job_id]
-        if job.status == "failed":
-            raise ValueError(f"Job {job_id} failed: {job.error}")
-        if job.status != "done":
-            raise KeyError(
-                f"Job {job_id} is not done yet (status: {job.status})"
-            )
-        return job.result
+            if job.status == "failed":
+                raise ValueError(f"Job {job_id} failed: {job.error}")
+            if job.status != "done":
+                raise ValueError(
+                    f"Job {job_id} is not done yet (status: {job.status})"
+                )
+            return job.result
 
     def cancel(self, job_id: str) -> bool:
         """Attempt to cancel a pending job.

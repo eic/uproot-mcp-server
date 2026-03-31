@@ -30,6 +30,15 @@ def _fast_fn(value: int = 42) -> int:
     return value
 
 
+def _job_exists(store: JobStore, job_id: str) -> bool:
+    """Return True if *job_id* is still tracked in *store*."""
+    try:
+        store.status(job_id)
+        return True
+    except KeyError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Test class
 # ---------------------------------------------------------------------------
@@ -59,7 +68,7 @@ class TestJobStore:
         # target job stays pending long enough to cancel.
         store = JobStore(max_workers=1)
         # Occupy the single worker thread
-        _blocker = store.submit(_slow_fn, 2.0)
+        _blocker = store.submit(_slow_fn, 0.5)
         # Now submit the job we want to cancel
         job_id = store.submit(_fast_fn, 1)
 
@@ -78,7 +87,7 @@ class TestJobStore:
     def test_cancel_running(self) -> None:
         """cancel() returns False when the job is already running."""
         store = JobStore(max_workers=2)
-        job_id = store.submit(_slow_fn, 1.0)
+        job_id = store.submit(_slow_fn, 0.3)
 
         # Wait until it starts
         deadline = time.monotonic() + 3.0
@@ -98,27 +107,29 @@ class TestJobStore:
 
     def test_lru_eviction(self) -> None:
         """After 21 completed jobs the oldest is evicted from the store."""
-        store = JobStore(max_workers=4, max_completed=20)
+        # Use a single worker so jobs complete in submission order, making
+        # eviction order deterministic.
+        store = JobStore(max_workers=1, max_completed=20)
         ids: list[str] = []
         for i in range(21):
             ids.append(store.submit(_fast_fn, i))
 
-        # Wait for all to finish
+        # Wait for all to finish or be evicted
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
-            statuses = [store.status(jid)["status"] for jid in ids if jid in store._jobs]
-            if all(s == "done" for s in statuses):
+            alive = sum(1 for jid in ids if _job_exists(store, jid))
+            if alive == 20:
                 break
             time.sleep(0.05)
 
-        # The first job should have been evicted
-        with pytest.raises(KeyError):
-            store.status(ids[0])
-
-        # Jobs 1-20 should still be present
-        for jid in ids[1:]:
-            s = store.status(jid)
-            assert s["status"] == "done"
+        # Exactly one job should have been evicted; 20 remain
+        alive_ids = [jid for jid in ids if _job_exists(store, jid)]
+        evicted_ids = [jid for jid in ids if not _job_exists(store, jid)]
+        assert len(evicted_ids) == 1
+        assert len(alive_ids) == 20
+        # With a single worker the first submitted job completes first, so it
+        # is the one evicted when the 21st job completes.
+        assert evicted_ids[0] == ids[0]
 
     def test_failed_job(self) -> None:
         """A failing function sets status=failed; result() raises ValueError."""
@@ -158,24 +169,14 @@ class TestJobStore:
         assert s["error"] is None
 
     def test_result_before_done_raises(self) -> None:
-        """result() raises KeyError when the job is still pending/running."""
+        """result() raises ValueError when the job is still pending/running."""
         store = JobStore(max_workers=1)
         # Occupy the worker
-        _blocker = store.submit(_slow_fn, 2.0)
+        _blocker = store.submit(_slow_fn, 0.5)
         job_id = store.submit(_fast_fn)
 
-        with pytest.raises(KeyError):
+        with pytest.raises(ValueError):
             store.result(job_id)
-
-        # Clean up
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            try:
-                if store.status(_blocker)["status"] == "done":
-                    break
-            except KeyError:
-                break
-            time.sleep(0.05)
 
     def test_unknown_job_raises(self) -> None:
         """Accessing an unknown job_id raises KeyError."""

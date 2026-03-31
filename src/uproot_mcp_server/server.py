@@ -484,8 +484,6 @@ def submit_kernel_dataset(
     kernel_code: str,
     branches: list[str],
     cut: str | None = None,
-    entry_start: int | None = None,
-    entry_stop: int | None = None,
     entries_per_file: int | None = None,
     workers: int = 4,
     page: int = 0,
@@ -510,10 +508,6 @@ def submit_kernel_dataset(
         Branch names to load and pass into ``events``.
     cut:
         Optional boolean selection expression applied per file.
-    entry_start:
-        Global entry start offset (applied per-file).
-    entry_stop:
-        Global entry stop offset (applied per-file).
     entries_per_file:
         Maximum entries to read per file (``None`` reads all).
     workers:
@@ -528,7 +522,7 @@ def submit_kernel_dataset(
     dict with keys:
 
     - ``job_id``: UUID string for polling / retrieval
-    - ``status``: always ``"pending"`` on success
+    - ``status``: current job status at time of return
     - ``n_files``: number of files submitted
     """
     try:
@@ -556,7 +550,7 @@ def submit_kernel_dataset(
         )
         return {
             "job_id": job_id,
-            "status": "pending",
+            "status": _job_store.status(job_id)["status"],
             "n_files": len(file_paths),
         }
     except Exception as exc:
