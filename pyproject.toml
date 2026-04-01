@@ -25,6 +25,7 @@ dev = [
 ]
 xrootd = [
     "xrootd>=5.4.0",
+    "fsspec-xrootd>=0.3.0",
 ]
 
 [project.scripts]
