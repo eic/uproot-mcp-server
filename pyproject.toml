@@ -24,8 +24,8 @@ dev = [
     "pytest-cov>=4.0.0",
 ]
 xrootd = [
-    "xrootd>=5.4.0",
     "fsspec-xrootd>=0.3.0",
+    "xrootd>=5.4.0",
 ]
 
 [project.scripts]
