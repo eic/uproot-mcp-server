@@ -14,7 +14,7 @@ dependencies = [
     "uproot>=5.0.0",
     "numpy>=1.24.0",
     "awkward>=2.0.0",
-    "RestrictedPython>=7.0",
+    "RestrictedPython>=8.1",
 ]
 
 [project.optional-dependencies]
