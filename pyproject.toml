@@ -24,7 +24,7 @@ dev = [
     "pytest-cov>=4.1.0",
 ]
 xrootd = [
-    "fsspec-xrootd>=0.3.0",
+    "fsspec-xrootd>=0.5.2",
     "xrootd>=5.4.0",
 ]
 
