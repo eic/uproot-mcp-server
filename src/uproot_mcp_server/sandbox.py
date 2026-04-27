@@ -317,32 +317,35 @@ def execute_kernel(
     proc.start()
     child_conn.close()  # Parent only reads; close the write end here.
 
-    if not parent_conn.poll(timeout):
-        # Timeout: forcefully terminate the subprocess.
-        proc.terminate()
-        proc.join(2.0)
-        if proc.is_alive():
-            proc.kill()
-            proc.join(1.0)
-        raise KernelError(f"Kernel execution timed out after {timeout:.1f} s")
-
-    proc.join()
-
     try:
-        status, payload = parent_conn.recv()
-    except EOFError as exc:
-        raise KernelError(
-            f"Kernel process exited unexpectedly (exit code: {proc.exitcode})"
-        ) from exc
+        if not parent_conn.poll(timeout):
+            # Timeout: forcefully terminate the subprocess.
+            proc.terminate()
+            proc.join(2.0)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(1.0)
+            raise KernelError(f"Kernel execution timed out after {timeout:.1f} s")
 
-    if status == "ok":
-        return payload
-    if status == "def_error":
-        raise KernelError(f"Kernel definition failed: {payload}")
-    if status == "missing":
-        raise KernelError("Kernel code must define a callable named 'kernel'")
-    # status == "run_error"
-    raise KernelError(f"Kernel raised an exception: {payload}")
+        proc.join()
+
+        try:
+            status, payload = parent_conn.recv()
+        except EOFError as exc:
+            raise KernelError(
+                f"Kernel process exited unexpectedly (exit code: {proc.exitcode})"
+            ) from exc
+
+        if status == "ok":
+            return payload
+        if status == "def_error":
+            raise KernelError(f"Kernel definition failed: {payload}")
+        if status == "missing":
+            raise KernelError("Kernel code must define a callable named 'kernel'")
+        # status == "run_error"
+        raise KernelError(f"Kernel raised an exception: {payload}")
+    finally:
+        parent_conn.close()
 
 
 def execute_reduce(
@@ -390,27 +393,30 @@ def execute_reduce(
     proc.start()
     child_conn.close()
 
-    if not parent_conn.poll(timeout):
-        proc.terminate()
-        proc.join(2.0)
-        if proc.is_alive():
-            proc.kill()
-            proc.join(1.0)
-        raise KernelError(f"Reduce execution timed out after {timeout:.1f} s")
-
-    proc.join()
-
     try:
-        status, payload = parent_conn.recv()
-    except EOFError as exc:
-        raise KernelError(
-            f"Reduce process exited unexpectedly (exit code: {proc.exitcode})"
-        ) from exc
+        if not parent_conn.poll(timeout):
+            proc.terminate()
+            proc.join(2.0)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(1.0)
+            raise KernelError(f"Reduce execution timed out after {timeout:.1f} s")
 
-    if status == "ok":
-        return payload
-    if status == "def_error":
-        raise KernelError(f"Reduce definition failed: {payload}")
-    if status == "missing":
-        raise KernelError("reduce_code must define a callable named 'reduce'")
-    raise KernelError(f"Reduce raised an exception: {payload}")
+        proc.join()
+
+        try:
+            status, payload = parent_conn.recv()
+        except EOFError as exc:
+            raise KernelError(
+                f"Reduce process exited unexpectedly (exit code: {proc.exitcode})"
+            ) from exc
+
+        if status == "ok":
+            return payload
+        if status == "def_error":
+            raise KernelError(f"Reduce definition failed: {payload}")
+        if status == "missing":
+            raise KernelError("reduce_code must define a callable named 'reduce'")
+        raise KernelError(f"Reduce raised an exception: {payload}")
+    finally:
+        parent_conn.close()
