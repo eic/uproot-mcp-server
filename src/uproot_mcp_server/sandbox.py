@@ -46,6 +46,13 @@ class KernelError(ValueError):
 # Constants
 # ---------------------------------------------------------------------------
 
+# Use the "spawn" start method explicitly. The default on Linux is "fork",
+# which clones the parent's memory including held locks; forking from a
+# process running an asyncio event loop (FastMCP stdio) deadlocks the child
+# on inherited locks, so every kernel call would hang until the timeout.
+# "spawn" launches a fresh interpreter via exec — no inherited state.
+_MP_CTX = multiprocessing.get_context("spawn")
+
 _MAX_CODE_BYTES: int = 65_536  # 64 KB
 
 # Builtins that are safe to expose inside kernels
@@ -300,9 +307,9 @@ def execute_kernel(
         execution raises an exception, or the timeout is exceeded.
     """
     code_bytes = marshal.dumps(code_obj)
-    parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+    parent_conn, child_conn = _MP_CTX.Pipe(duplex=False)
 
-    proc = multiprocessing.Process(
+    proc = _MP_CTX.Process(
         target=_kernel_worker,
         args=(code_bytes, branches_data, child_conn),
         daemon=True,
@@ -373,9 +380,9 @@ def execute_reduce(
         execution raises an exception, or the timeout is exceeded.
     """
     code_bytes = marshal.dumps(code_obj)
-    parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+    parent_conn, child_conn = _MP_CTX.Pipe(duplex=False)
 
-    proc = multiprocessing.Process(
+    proc = _MP_CTX.Process(
         target=_reduce_worker,
         args=(code_bytes, a, b, child_conn),
         daemon=True,
