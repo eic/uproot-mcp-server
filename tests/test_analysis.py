@@ -74,6 +74,35 @@ _remote_only = pytest.mark.skipif(
 )
 
 
+# ---------------------------------------------------------------------------
+# Fixture: TTree with dotted-named branches (mimics PODIO/EDM4eic layout
+# where physical branch names contain dots, e.g. ``MCParticles.momentum.x``).
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def dotted_branch_file(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Build a small TTree whose branch names contain dots, the way PODIO /
+    EDM4eic files name their record sub-fields (e.g. ``Particles.x``)."""
+    import numpy as np
+    import uproot
+
+    rng = np.random.default_rng(0)
+    n = 200
+    path = tmp_path_factory.mktemp("dotted") / "dotted.root"
+    with uproot.recreate(str(path)) as f:
+        f.mktree("events", {
+            "Particles.x": "float32",
+            "Particles.y": "float32",
+            "Particles.z": "float32",
+        })
+        f["events"].extend({
+            "Particles.x": rng.normal(0, 1, n).astype(np.float32),
+            "Particles.y": rng.normal(0, 1, n).astype(np.float32),
+            "Particles.z": rng.normal(5, 2, n).astype(np.float32),
+        })
+    return str(path)
+
+
 # ===========================================================================
 # get_file_structure
 # ===========================================================================
@@ -505,6 +534,22 @@ class TestRunKernel:
                 LOCAL_FILE, "events", code, ["nonexistent"]
             )
 
+    def test_dotted_branch_name(self, dotted_branch_file):
+        """Dotted branch names like ``Particles.x`` (the PODIO/EDM4eic
+        sub-field pattern) must be accepted, not rejected by pre-flight
+        validation. Production layouts where the dotted name is a
+        TBranchElement sub-branch are exercised manually against real
+        EDM4eic files (e.g. eicrecon / BeAGLE outputs)."""
+        code = (
+            "def kernel(events):\n"
+            "    return float(np.mean(events['Particles.x']))\n"
+        )
+        result = analysis.run_kernel(
+            dotted_branch_file, "events", code, ["Particles.x"]
+        )
+        assert result["result_type"] == "scalar"
+        assert isinstance(result["data"], float)
+
     def test_invalid_kernel_raises(self):
         from uproot_mcp_server.sandbox import KernelError
         code = "def kernel(events):\n    import os\n    return os.getcwd()\n"
@@ -595,6 +640,18 @@ class TestValidateDatasetSchema:
         )
         assert result["compatible"] is False
         assert "nonexistent_branch_xyz" in result["missing_branch_files"]
+
+    def test_dotted_branch_name(self, dotted_branch_file):
+        """Dotted branch names (PODIO/EDM4eic ``Particles.x`` pattern) must
+        be recognised as present, not flagged as missing."""
+        result = analysis.validate_dataset_schema(
+            [dotted_branch_file], "events",
+            ["Particles.x", "Particles.y", "Particles.z"],
+            workers=1,
+        )
+        assert result["compatible"] is True
+        assert result["n_files_ok"] == 1
+        assert result["missing_branch_files"] == {}
 
     def test_bad_tree(self):
         result = analysis.validate_dataset_schema(

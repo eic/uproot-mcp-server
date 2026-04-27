@@ -579,9 +579,14 @@ def run_kernel(
     with _open_file(file_path) as f:
         tree = f[tree_name]
 
-        available = set(tree.keys())
+        # Defer to uproot's own name resolver: ``tree[name]`` accepts any
+        # form ``tree.arrays([name])`` will, including PODIO/EDM4eic record
+        # sub-fields like ``MCParticles.momentum.x`` that don't appear in
+        # ``tree.keys()`` for some file layouts.
         for b in branches:
-            if b not in available:
+            try:
+                tree[b]
+            except (KeyError, uproot.exceptions.KeyInFileError):
                 raise ValueError(
                     f"Branch '{b}' not found in tree '{tree_name}'"
                 )
@@ -827,9 +832,13 @@ def validate_dataset_schema(
         try:
             with _open_file(fp) as f:
                 tree = f[tree_name]
-                available = set(tree.keys())
                 entries = int(tree.num_entries)
-                missing = [b for b in branches if b not in available]
+                missing: list[str] = []
+                for b in branches:
+                    try:
+                        tree[b]
+                    except (KeyError, uproot.exceptions.KeyInFileError):
+                        missing.append(b)
                 return fp, entries, missing, None
         except Exception as exc:
             return fp, None, [], str(exc)
