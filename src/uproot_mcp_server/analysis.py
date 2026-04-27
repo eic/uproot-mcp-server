@@ -579,9 +579,8 @@ def run_kernel(
     with _open_file(file_path) as f:
         tree = f[tree_name]
 
-        available = set(tree.keys())
         for b in branches:
-            if b not in available:
+            if b not in tree:
                 raise ValueError(
                     f"Branch '{b}' not found in tree '{tree_name}'"
                 )
@@ -827,9 +826,8 @@ def validate_dataset_schema(
         try:
             with _open_file(fp) as f:
                 tree = f[tree_name]
-                available = set(tree.keys())
                 entries = int(tree.num_entries)
-                missing = [b for b in branches if b not in available]
+                missing = [b for b in branches if b not in tree]
                 return fp, entries, missing, None
         except Exception as exc:
             return fp, None, [], str(exc)
