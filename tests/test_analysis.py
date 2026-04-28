@@ -25,6 +25,7 @@ from uproot_mcp_server import analysis
 
 FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
 LOCAL_FILE = str(FIXTURE_DIR / "test_eic.root")
+NESTED_FILE = str(FIXTURE_DIR / "test_eic_nested.root")
 
 # Remote file: set via environment variable (skipped if not set)
 REMOTE_FILE = os.environ.get(
@@ -626,6 +627,57 @@ class TestValidateDatasetSchema:
         )
         json.dumps(result)  # must not raise
 
+
+# ---------------------------------------------------------------------------
+# Branch name resolution (podio/edm4eic regression)
+# ---------------------------------------------------------------------------
+
+
+class TestNestedBranchNameResolution:
+    """Regression: branch validation must use ``name in tree`` rather than
+    ``name in set(tree.keys())``.
+
+    On podio/edm4eic files, ``tree.keys()`` reports full paths like
+    ``Particles/Particles.momentum.x`` so the dotted leaf name (which uproot
+    *can* resolve via ``tree[name]``) is absent from that set.  The synthetic
+    fixture reproduces the same mismatch with a record-typed branch where
+    leaf-only names like ``"x"`` are resolvable but missing from default keys.
+    """
+
+    def test_precondition_keys_mismatch(self):
+        """Sanity check: without this, the tests below could silently pass
+        for the wrong reason if uproot's behavior changes."""
+        import uproot
+        with uproot.open(NESTED_FILE) as f:
+            tree = f["events"]
+            assert "x" not in set(tree.keys())
+            assert "x" in tree
+
+    def test_run_kernel_does_not_reject_unlisted_leaf_name(self):
+        """Pre-fix, ``run_kernel`` short-circuited with
+        ``ValueError("Branch 'x' not found in tree 'events'")`` because the
+        membership check used ``set(tree.keys())``.  Downstream array
+        unpacking on this synthetic fixture still fails (``tree.arrays(['x'])``
+        returns a record nested under ``hits``), but that is unrelated; the
+        regression-specific assertion is that the *not-found* error is gone.
+        """
+        code = "def kernel(events):\n    return events['x']\n"
+        try:
+            analysis.run_kernel(NESTED_FILE, "events", code, ["x"])
+        except ValueError as exc:
+            assert "not found" not in str(exc), (
+                f"Pre-fix not-found error has resurfaced: {exc!r}"
+            )
+        except Exception:
+            pass  # any other downstream failure is fine for this regression
+
+    def test_validate_dataset_schema_accepts_unlisted_leaf_name(self):
+        result = analysis.validate_dataset_schema(
+            [NESTED_FILE], "events", ["x", "y"], workers=1
+        )
+        assert result["compatible"] is True
+        assert result["n_files_ok"] == 1
+        assert result["missing_branch_files"] == {}
 
 
 # ===========================================================================
