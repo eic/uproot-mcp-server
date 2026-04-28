@@ -46,6 +46,13 @@ class KernelError(ValueError):
 # Constants
 # ---------------------------------------------------------------------------
 
+# Use the "spawn" start method explicitly. The default on Linux is "fork",
+# which clones the parent's memory including held locks; forking from a
+# process running an asyncio event loop (FastMCP stdio) deadlocks the child
+# on inherited locks, so every kernel call would hang until the timeout.
+# "spawn" launches a fresh interpreter via exec — no inherited state.
+_MP_CTX = multiprocessing.get_context("spawn")
+
 _MAX_CODE_BYTES: int = 65_536  # 64 KB
 
 # Builtins that are safe to expose inside kernels
@@ -300,9 +307,9 @@ def execute_kernel(
         execution raises an exception, or the timeout is exceeded.
     """
     code_bytes = marshal.dumps(code_obj)
-    parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+    parent_conn, child_conn = _MP_CTX.Pipe(duplex=False)
 
-    proc = multiprocessing.Process(
+    proc = _MP_CTX.Process(
         target=_kernel_worker,
         args=(code_bytes, branches_data, child_conn),
         daemon=True,
@@ -310,32 +317,35 @@ def execute_kernel(
     proc.start()
     child_conn.close()  # Parent only reads; close the write end here.
 
-    if not parent_conn.poll(timeout):
-        # Timeout: forcefully terminate the subprocess.
-        proc.terminate()
-        proc.join(2.0)
-        if proc.is_alive():
-            proc.kill()
-            proc.join(1.0)
-        raise KernelError(f"Kernel execution timed out after {timeout:.1f} s")
-
-    proc.join()
-
     try:
-        status, payload = parent_conn.recv()
-    except EOFError as exc:
-        raise KernelError(
-            f"Kernel process exited unexpectedly (exit code: {proc.exitcode})"
-        ) from exc
+        if not parent_conn.poll(timeout):
+            # Timeout: forcefully terminate the subprocess.
+            proc.terminate()
+            proc.join(2.0)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(1.0)
+            raise KernelError(f"Kernel execution timed out after {timeout:.1f} s")
 
-    if status == "ok":
-        return payload
-    if status == "def_error":
-        raise KernelError(f"Kernel definition failed: {payload}")
-    if status == "missing":
-        raise KernelError("Kernel code must define a callable named 'kernel'")
-    # status == "run_error"
-    raise KernelError(f"Kernel raised an exception: {payload}")
+        proc.join()
+
+        try:
+            status, payload = parent_conn.recv()
+        except EOFError as exc:
+            raise KernelError(
+                f"Kernel process exited unexpectedly (exit code: {proc.exitcode})"
+            ) from exc
+
+        if status == "ok":
+            return payload
+        if status == "def_error":
+            raise KernelError(f"Kernel definition failed: {payload}")
+        if status == "missing":
+            raise KernelError("Kernel code must define a callable named 'kernel'")
+        # status == "run_error"
+        raise KernelError(f"Kernel raised an exception: {payload}")
+    finally:
+        parent_conn.close()
 
 
 def execute_reduce(
@@ -373,9 +383,9 @@ def execute_reduce(
         execution raises an exception, or the timeout is exceeded.
     """
     code_bytes = marshal.dumps(code_obj)
-    parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+    parent_conn, child_conn = _MP_CTX.Pipe(duplex=False)
 
-    proc = multiprocessing.Process(
+    proc = _MP_CTX.Process(
         target=_reduce_worker,
         args=(code_bytes, a, b, child_conn),
         daemon=True,
@@ -383,27 +393,30 @@ def execute_reduce(
     proc.start()
     child_conn.close()
 
-    if not parent_conn.poll(timeout):
-        proc.terminate()
-        proc.join(2.0)
-        if proc.is_alive():
-            proc.kill()
-            proc.join(1.0)
-        raise KernelError(f"Reduce execution timed out after {timeout:.1f} s")
-
-    proc.join()
-
     try:
-        status, payload = parent_conn.recv()
-    except EOFError as exc:
-        raise KernelError(
-            f"Reduce process exited unexpectedly (exit code: {proc.exitcode})"
-        ) from exc
+        if not parent_conn.poll(timeout):
+            proc.terminate()
+            proc.join(2.0)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(1.0)
+            raise KernelError(f"Reduce execution timed out after {timeout:.1f} s")
 
-    if status == "ok":
-        return payload
-    if status == "def_error":
-        raise KernelError(f"Reduce definition failed: {payload}")
-    if status == "missing":
-        raise KernelError("reduce_code must define a callable named 'reduce'")
-    raise KernelError(f"Reduce raised an exception: {payload}")
+        proc.join()
+
+        try:
+            status, payload = parent_conn.recv()
+        except EOFError as exc:
+            raise KernelError(
+                f"Reduce process exited unexpectedly (exit code: {proc.exitcode})"
+            ) from exc
+
+        if status == "ok":
+            return payload
+        if status == "def_error":
+            raise KernelError(f"Reduce definition failed: {payload}")
+        if status == "missing":
+            raise KernelError("reduce_code must define a callable named 'reduce'")
+        raise KernelError(f"Reduce raised an exception: {payload}")
+    finally:
+        parent_conn.close()
