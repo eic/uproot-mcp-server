@@ -11,7 +11,8 @@ COPY src/ ./src/
 # Install base package, then xrootd only if a binary wheel is available.
 # xrootd does not publish aarch64 wheels, so building from source is avoided.
 RUN pip install --no-cache-dir "." && \
-    pip install --no-cache-dir --only-binary=xrootd "xrootd>=5.4.0" || true && \
+    (pip install --no-cache-dir --only-binary=xrootd "xrootd>=5.4.0" || true) && \
+    pip install --no-cache-dir "fsspec-xrootd>=0.5.2" && \
     pip cache purge
 
 # ---- Runtime stage ----
