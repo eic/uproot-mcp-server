@@ -8,8 +8,11 @@ WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
-# Install base package, then xrootd only if a binary wheel is available.
-# xrootd does not publish aarch64 wheels, so building from source is avoided.
+# Install base package, then xrootd only if a binary wheel is available
+# (xrootd does not publish aarch64 wheels, so building from source is avoided).
+# fsspec-xrootd is always installed unconditionally because it is a pure-Python
+# package and is required to resolve root:// URLs via fsspec even when the
+# native xrootd wheel is present.
 RUN pip install --no-cache-dir "." && \
     (pip install --no-cache-dir --only-binary=xrootd "xrootd>=5.4.0" || true) && \
     pip install --no-cache-dir "fsspec-xrootd>=0.5.2" && \
