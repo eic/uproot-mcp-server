@@ -14,8 +14,8 @@ COPY src/ ./src/
 # package and is required to resolve root:// URLs via fsspec even when the
 # native xrootd wheel is present.
 RUN pip install --no-cache-dir "." && \
-    (pip install --no-cache-dir --only-binary=xrootd "xrootd>=5.4.0" || true) && \
-    pip install --no-cache-dir "fsspec-xrootd>=0.5.2" && \
+    (pip install --no-cache-dir --only-binary=xrootd "xrootd>=5.4.0" && \
+      pip install --no-cache-dir "fsspec-xrootd>=0.5.2"|| true ) && \
     pip cache purge
 
 # ---- Runtime stage ----
