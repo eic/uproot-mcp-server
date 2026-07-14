@@ -73,9 +73,9 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> dict[str, Any
         Local filesystem path **or** XRootD URL, e.g.
         ``root://dtn-eic.jlab.org//path/to/file.root``.
     max_branches:
-        Maximum number of branches listed per tree (default 100). An EDM4eic
-        file holds thousands of branches, so an unbounded listing runs to
-        megabytes; call ``get_tree_info`` for the complete set.
+        Maximum number of branches listed per tree (default 100; must be >= 0).
+        An EDM4eic file holds thousands of branches, so an unbounded listing runs
+        to megabytes; call ``get_tree_info`` for the complete set.
 
     Returns
     -------
@@ -92,7 +92,7 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> dict[str, Any
         result = analysis.get_file_structure(file_path, max_branches=max_branches)
         return _json_safe(result)
     except Exception as exc:
-        return {"error": str(exc), "file_path": file_path}
+        return {"error": str(exc), "file_path": file_path, "max_branches": max_branches}
 
 
 @mcp.tool()

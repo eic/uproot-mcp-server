@@ -111,7 +111,14 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> FileStructure
     says whether more exist); ``num_branches`` is always the full count. An
     EDM4eic file holds thousands of branches, so an unbounded listing runs to
     megabytes — use :func:`get_tree_info` for the complete set.
+
+    Raises
+    ------
+    ValueError
+        If ``max_branches`` is negative.
     """
+    if max_branches < 0:
+        raise ValueError(f"max_branches must be >= 0, got {max_branches}")
     t0 = time.perf_counter()
     with _open_file(file_path) as f:
         keys: list[dict[str, Any]] = []

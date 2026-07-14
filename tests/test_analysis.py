@@ -91,6 +91,10 @@ class TestGetFileStructure:
             assert len(tree["branches"]) <= 1
             assert tree["branches_truncated"] == (tree["num_branches"] > 1)
 
+    def test_negative_max_branches_rejected(self):
+        with pytest.raises(ValueError):
+            analysis.get_file_structure(LOCAL_FILE, max_branches=-1)
+
     def test_file_path_echoed(self):
         result = analysis.get_file_structure(LOCAL_FILE)
         assert result["file_path"] == LOCAL_FILE
