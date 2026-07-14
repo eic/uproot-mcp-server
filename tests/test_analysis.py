@@ -85,6 +85,12 @@ class TestGetFileStructure:
         result = analysis.get_file_structure(LOCAL_FILE)
         assert isinstance(result, dict)
 
+    def test_branches_capped(self):
+        result = analysis.get_file_structure(LOCAL_FILE, max_branches=1)
+        for tree in result["trees"]:
+            assert len(tree["branches"]) <= 1
+            assert tree["branches_truncated"] == (tree["num_branches"] > 1)
+
     def test_file_path_echoed(self):
         result = analysis.get_file_structure(LOCAL_FILE)
         assert result["file_path"] == LOCAL_FILE
