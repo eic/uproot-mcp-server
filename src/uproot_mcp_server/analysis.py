@@ -98,7 +98,7 @@ def _branch_info(branch: Any, *, include_leaves: bool = True) -> dict[str, Any]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_file_structure(file_path: str) -> FileStructure:
+def get_file_structure(file_path: str, max_branches: int = 100) -> FileStructure:
     """Return the high-level structure of a ROOT file.
 
     Returns a dict with:
@@ -106,7 +106,19 @@ def get_file_structure(file_path: str) -> FileStructure:
     - ``keys``: list of top-level key dicts (name, classname, cycle)
     - ``trees``: list of tree summary dicts for each TTree found at the top level
     - ``elapsed_s``: wall-clock seconds for the operation
+
+    Each tree lists at most ``max_branches`` branches (``branches_truncated``
+    says whether more exist); ``num_branches`` is always the full count. An
+    EDM4eic file holds thousands of branches, so an unbounded listing runs to
+    megabytes — use :func:`get_tree_info` for the complete set.
+
+    Raises
+    ------
+    ValueError
+        If ``max_branches`` is negative.
     """
+    if max_branches < 0:
+        raise ValueError(f"max_branches must be >= 0, got {max_branches}")
     t0 = time.perf_counter()
     with _open_file(file_path) as f:
         keys: list[dict[str, Any]] = []
@@ -127,6 +139,7 @@ def get_file_structure(file_path: str) -> FileStructure:
             if key_class in ("TTree", "TNtuple", "TNtupleD"):
                 try:
                     tree = f[key_name]
+                    branch_names = list(tree.keys())
                     trees.append(
                         {
                             "name": base_name,
@@ -134,11 +147,12 @@ def get_file_structure(file_path: str) -> FileStructure:
                             "cycle": int(cycle_str),
                             "classname": key_class,
                             "num_entries": int(tree.num_entries),
-                            "num_branches": len(tree.keys()),
+                            "num_branches": len(branch_names),
                             "branches": [
                                 _branch_info(tree[b], include_leaves=False)
-                                for b in tree.keys()
+                                for b in branch_names[:max_branches]
                             ],
+                            "branches_truncated": len(branch_names) > max_branches,
                         }
                     )
                 except Exception as exc:

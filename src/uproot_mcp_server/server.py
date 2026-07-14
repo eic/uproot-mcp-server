@@ -60,7 +60,7 @@ def _json_safe(obj: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def get_file_structure(file_path: str) -> dict[str, Any]:
+def get_file_structure(file_path: str, max_branches: int = 100) -> dict[str, Any]:
     """Return the top-level structure of a ROOT file.
 
     Lists all keys stored in the file and provides a summary of every TTree
@@ -72,6 +72,10 @@ def get_file_structure(file_path: str) -> dict[str, Any]:
     file_path:
         Local filesystem path **or** XRootD URL, e.g.
         ``root://dtn-eic.jlab.org//path/to/file.root``.
+    max_branches:
+        Maximum number of branches listed per tree (default 100; must be >= 0).
+        An EDM4eic file holds thousands of branches, so an unbounded listing runs
+        to megabytes; call ``get_tree_info`` for the complete set.
 
     Returns
     -------
@@ -80,14 +84,15 @@ def get_file_structure(file_path: str) -> dict[str, Any]:
     - ``file_path``: echoed input path
     - ``keys``: list of dicts with ``name``, ``classname``, ``cycle``
     - ``trees``: list of TTree summary dicts containing ``name``,
-      ``num_entries``, ``num_branches``, and a ``branches`` list with
-      basic per-branch metadata
+      ``num_entries``, ``num_branches`` (the full count), ``branches_truncated``,
+      and a ``branches`` list, capped at ``max_branches``, with basic per-branch
+      metadata
     """
     try:
-        result = analysis.get_file_structure(file_path)
+        result = analysis.get_file_structure(file_path, max_branches=max_branches)
         return _json_safe(result)
     except Exception as exc:
-        return {"error": str(exc), "file_path": file_path}
+        return {"error": str(exc), "file_path": file_path, "max_branches": max_branches}
 
 
 @mcp.tool()
