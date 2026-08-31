@@ -6,11 +6,14 @@ Exposes uproot-based ROOT file analysis tools over the Model Context Protocol
 
 Run with::
 
-    python -m uproot_mcp_server.server        # stdio transport (default)
+    uproot-mcp-server                                   # stdio transport (default)
+    uproot-mcp-server --transport http --port 9101      # streamable HTTP on /mcp
 """
 
 from __future__ import annotations
 
+import argparse
+import sys
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -888,8 +891,57 @@ def validate_dataset_schema(
 
 
 def main() -> None:
-    """Run the MCP server using stdio transport."""
-    mcp.run(transport="stdio")
+    """Run the MCP server (stdio by default, streamable HTTP on request)."""
+    parser = argparse.ArgumentParser(
+        prog="uproot-mcp-server",
+        description="MCP server for uproot-based ROOT file analysis.",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http", "streamable-http", "sse"],
+        default="stdio",
+        help="Transport to serve on (default: stdio). 'http' is streamable HTTP.",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address for the HTTP transports (default: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=9101,
+        help="TCP port for the HTTP transports (default: 9101).",
+    )
+    parser.add_argument(
+        "--path",
+        default="/mcp",
+        help="URL path the streamable-HTTP endpoint is served on (default: /mcp).",
+    )
+    args = parser.parse_args()
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+        return
+
+    # Set post-construction so FASTMCP_* env vars / .env cannot override the CLI.
+    mcp.settings.host = args.host
+    mcp.settings.port = args.port
+    mcp.settings.streamable_http_path = args.path
+    # Stateless: the JobStore is process-wide, not session-scoped, so clients
+    # can reconnect freely without losing async jobs.
+    mcp.settings.stateless_http = True
+    mcp.settings.json_response = False
+
+    if args.host not in {"127.0.0.1", "::1", "localhost"}:
+        print(
+            f"WARNING: --host {args.host} exposes every tool on a non-loopback "
+            "interface with no authentication. Bind to 127.0.0.1 and use a "
+            "tunnel or an authenticating proxy for remote access.",
+            file=sys.stderr,
+        )
+
+    mcp.run(transport="sse" if args.transport == "sse" else "streamable-http")
 
 
 if __name__ == "__main__":
