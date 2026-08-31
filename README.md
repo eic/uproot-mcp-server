@@ -70,13 +70,13 @@ pip install -e ".[xrootd]"
 - `uproot` ≥ 5.0
 - `numpy` ≥ 1.24
 - `awkward` ≥ 2.0
-- `mcp` ≥ 1.0
+- `mcp` ≥ 1.10
 - `RestrictedPython` ≥ 7.0
 - *(optional)* `xrootd` ≥ 5.4 — required for `root://` URLs
 
 ## Usage
 
-### Starting the server (stdio transport)
+### Starting the server
 
 ```bash
 source .venv/bin/activate
@@ -85,7 +85,33 @@ python -m uproot_mcp_server.server
 uproot-mcp-server
 ```
 
+By default the server speaks stdio (for clients that spawn it themselves).
+It can also serve **streamable HTTP** natively:
+
+```bash
+uproot-mcp-server --transport http --host 127.0.0.1 --port 9101
+```
+
+The MCP endpoint is then `http://127.0.0.1:9101/mcp`.  The server binds
+loopback by default; binding any other address prints a warning because the
+tools carry no authentication.
+
 ### MCP client configuration
+
+#### Streamable HTTP (remote server)
+
+With the server running under `--transport http`:
+
+```json
+{
+  "mcpServers": {
+    "uproot": {
+      "type": "http",
+      "url": "http://127.0.0.1:9101/mcp"
+    }
+  }
+}
+```
 
 #### Local installation
 

@@ -27,20 +27,25 @@ pip install -e ".[xrootd]"
 | `uproot` | ≥ 5.0 | ROOT file I/O |
 | `numpy` | ≥ 1.24 | Numerical arrays |
 | `awkward` | ≥ 2.0 | Jagged array support |
-| `mcp` | ≥ 1.0 | MCP framework |
+| `mcp` | ≥ 1.10 | MCP framework |
 | `xrootd` | ≥ 5.4 | *(optional)* Required for `root://` URLs |
 
 ## Starting the server
 
-The server communicates over stdio, which is the standard transport for MCP
-clients such as Claude Desktop and VS Code Copilot.
+By default the server communicates over stdio, the standard transport for MCP
+clients that spawn the server themselves (Claude Desktop, VS Code Copilot).
+It can also serve **streamable HTTP** so remote clients connect over the
+network.
 
 ```bash
-# Run directly with Python
+# Run directly with Python (stdio)
 python -m uproot_mcp_server.server
 
 # Or use the installed entry-point (after pip install)
 uproot-mcp-server
+
+# Streamable HTTP on http://127.0.0.1:9101/mcp
+uproot-mcp-server --transport http --host 127.0.0.1 --port 9101
 ```
 
 ## MCP client configuration
@@ -71,6 +76,22 @@ Add the server to your `.vscode/mcp.json` workspace file:
     "uproot": {
       "type": "stdio",
       "command": "uproot-mcp-server"
+    }
+  }
+}
+```
+
+### Remote client over streamable HTTP
+
+Start the server with `--transport http`, then point any HTTP-capable MCP
+client at it:
+
+```json
+{
+  "mcpServers": {
+    "uproot": {
+      "type": "http",
+      "url": "http://127.0.0.1:9101/mcp"
     }
   }
 }

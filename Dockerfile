@@ -44,5 +44,8 @@ LABEL org.opencontainers.image.title="uproot MCP Server" \
       org.opencontainers.image.source="https://github.com/eic/uproot-mcp-server" \
       org.opencontainers.image.licenses="MIT"
 
-# Run the MCP server (stdio transport)
-CMD ["uproot-mcp-server"]
+EXPOSE 9101
+
+# stdio by default; HTTP: docker run -p 9101:9101 <image> --transport http --host 0.0.0.0
+ENTRYPOINT ["uproot-mcp-server"]
+CMD []
