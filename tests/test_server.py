@@ -10,6 +10,7 @@ to verify that:
 from __future__ import annotations
 
 import json
+import sys
 import pathlib
 
 import pytest
@@ -562,3 +563,28 @@ class TestAsyncJobTools:
         )
         assert "error" in result
         assert "job_id" not in result
+
+
+class TestTransportCli:
+    """The --transport CLI surface (no sockets are opened)."""
+
+    def test_http_transport_flags(self, monkeypatch):
+        calls = {}
+        monkeypatch.setattr(server.mcp, "run", lambda **kw: calls.update(kw))
+        monkeypatch.setattr(
+            sys, "argv",
+            ["uproot-mcp-server", "--transport", "http", "--port", "9999"],
+        )
+        server.main()
+        assert calls == {"transport": "streamable-http"}
+        assert server.mcp.settings.host == "127.0.0.1"
+        assert server.mcp.settings.port == 9999
+        assert server.mcp.settings.streamable_http_path == "/mcp"
+        assert server.mcp.settings.stateless_http is True
+
+    def test_stdio_is_default(self, monkeypatch):
+        calls = {}
+        monkeypatch.setattr(server.mcp, "run", lambda **kw: calls.update(kw))
+        monkeypatch.setattr(sys, "argv", ["uproot-mcp-server"])
+        server.main()
+        assert calls == {"transport": "stdio"}
