@@ -25,9 +25,10 @@ pip install -e ".[xrootd]"
 |---------|---------|-------|
 | Python | ≥ 3.10 | |
 | `uproot` | ≥ 5.0 | ROOT file I/O |
-| `numpy` | ≥ 1.24 | Numerical arrays |
+| `numpy` | ≥ 1.26.4 | Numerical arrays |
 | `awkward` | ≥ 2.0 | Jagged array support |
-| `mcp` | ≥ 1.10 | MCP framework |
+| `mcp` | ≥ 1.10, < 2 | MCP framework (2.x drops `mcp.server.fastmcp`) |
+| `RestrictedPython` | ≥ 8.1 | Sandboxes user kernel code |
 | `xrootd` | ≥ 5.4 | *(optional)* Required for `root://` URLs |
 
 ## Starting the server
