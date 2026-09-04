@@ -936,8 +936,9 @@ def main() -> None:
             file=sys.stderr,
         )
 
+    # FastMCP.run() takes only transport/mount_path; the rest goes via settings.
     if args.transport == "sse":
-        mcp.run(transport="sse", host=args.host, port=args.port)
+        mcp.run(transport="sse")
         return
 
     mcp.settings.streamable_http_path = args.path
@@ -945,14 +946,7 @@ def main() -> None:
     # can reconnect freely without losing async jobs.
     mcp.settings.stateless_http = True
     mcp.settings.json_response = False
-    mcp.run(
-        transport="streamable-http",
-        host=args.host,
-        port=args.port,
-        path=args.path,
-        stateless_http=True,
-        json_response=False,
-    )
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":
