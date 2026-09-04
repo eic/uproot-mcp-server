@@ -9,6 +9,7 @@ to verify that:
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 import pathlib
@@ -568,40 +569,63 @@ class TestAsyncJobTools:
 class TestTransportCli:
     """The --transport CLI surface (no sockets are opened)."""
 
+    @staticmethod
+    def _record_run(calls):
+        """Stub for mcp.run() that rejects kwargs the real one rejects."""
+        signature = inspect.signature(server.mcp.run)
+
+        def fake_run(**kwargs):
+            signature.bind(**kwargs)
+            calls.update(kwargs)
+
+        return fake_run
+
     def test_http_transport_flags(self, monkeypatch):
         calls = {}
-        monkeypatch.setattr(server.mcp, "run", lambda **kw: calls.update(kw))
+        monkeypatch.setattr(server.mcp, "run", self._record_run(calls))
         monkeypatch.setattr(
             sys, "argv",
             ["uproot-mcp-server", "--transport", "http", "--port", "9999"],
         )
         server.main()
-        assert calls == {
-            "transport": "streamable-http",
-            "host": "127.0.0.1",
-            "port": 9999,
-            "path": "/mcp",
-            "stateless_http": True,
-            "json_response": False,
-        }
+        assert calls == {"transport": "streamable-http"}
         assert server.mcp.settings.host == "127.0.0.1"
         assert server.mcp.settings.port == 9999
         assert server.mcp.settings.streamable_http_path == "/mcp"
         assert server.mcp.settings.stateless_http is True
 
+    def test_http_flags_reach_the_served_app(self, monkeypatch):
+        """Settings shape the app FastMCP actually serves."""
+        monkeypatch.setattr(server.mcp, "run", lambda **kw: None)
+        monkeypatch.setattr(
+            sys, "argv",
+            ["uproot-mcp-server", "--transport", "http", "--path", "/custom"],
+        )
+        original = server.mcp.settings.model_copy(deep=True)
+        try:
+            server.main()
+            app = server.mcp.streamable_http_app()
+            assert [r.path for r in app.routes] == ["/custom"]
+            assert server.mcp.session_manager.stateless is True
+        finally:
+            server.mcp.settings = original
+
     def test_stdio_is_default(self, monkeypatch):
         calls = {}
-        monkeypatch.setattr(server.mcp, "run", lambda **kw: calls.update(kw))
+        monkeypatch.setattr(server.mcp, "run", self._record_run(calls))
         monkeypatch.setattr(sys, "argv", ["uproot-mcp-server"])
         server.main()
         assert calls == {"transport": "stdio"}
 
     def test_sse_transport_flags(self, monkeypatch):
         calls = {}
-        monkeypatch.setattr(server.mcp, "run", lambda **kw: calls.update(kw))
+        monkeypatch.setattr(server.mcp, "run", self._record_run(calls))
         monkeypatch.setattr(
             sys, "argv",
             ["uproot-mcp-server", "--transport", "sse", "--host", "localhost", "--port", "9998"],
         )
         server.main()
-        assert calls == {"transport": "sse", "host": "localhost", "port": 9998}
+        assert calls == {"transport": "sse"}
+        assert server.mcp.settings.host == "localhost"
+        assert server.mcp.settings.port == 9998
+        assert server.mcp.settings.streamable_http_path == "/mcp"
