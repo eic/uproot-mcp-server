@@ -927,11 +927,6 @@ def main() -> None:
     # Set post-construction so FASTMCP_* env vars / .env cannot override the CLI.
     mcp.settings.host = args.host
     mcp.settings.port = args.port
-    mcp.settings.streamable_http_path = args.path
-    # Stateless: the JobStore is process-wide, not session-scoped, so clients
-    # can reconnect freely without losing async jobs.
-    mcp.settings.stateless_http = True
-    mcp.settings.json_response = False
 
     if args.host not in {"127.0.0.1", "::1", "localhost"}:
         print(
@@ -941,9 +936,17 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    transport = "sse" if args.transport == "sse" else "streamable-http"
+    if args.transport == "sse":
+        mcp.run(transport="sse", host=args.host, port=args.port)
+        return
+
+    mcp.settings.streamable_http_path = args.path
+    # Stateless: the JobStore is process-wide, not session-scoped, so clients
+    # can reconnect freely without losing async jobs.
+    mcp.settings.stateless_http = True
+    mcp.settings.json_response = False
     mcp.run(
-        transport=transport,
+        transport="streamable-http",
         host=args.host,
         port=args.port,
         path=args.path,

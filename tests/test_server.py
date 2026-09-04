@@ -595,3 +595,13 @@ class TestTransportCli:
         monkeypatch.setattr(sys, "argv", ["uproot-mcp-server"])
         server.main()
         assert calls == {"transport": "stdio"}
+
+    def test_sse_transport_flags(self, monkeypatch):
+        calls = {}
+        monkeypatch.setattr(server.mcp, "run", lambda **kw: calls.update(kw))
+        monkeypatch.setattr(
+            sys, "argv",
+            ["uproot-mcp-server", "--transport", "sse", "--host", "localhost", "--port", "9998"],
+        )
+        server.main()
+        assert calls == {"transport": "sse", "host": "localhost", "port": 9998}
