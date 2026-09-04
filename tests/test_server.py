@@ -576,7 +576,14 @@ class TestTransportCli:
             ["uproot-mcp-server", "--transport", "http", "--port", "9999"],
         )
         server.main()
-        assert calls == {"transport": "streamable-http"}
+        assert calls == {
+            "transport": "streamable-http",
+            "host": "127.0.0.1",
+            "port": 9999,
+            "path": "/mcp",
+            "stateless_http": True,
+            "json_response": False,
+        }
         assert server.mcp.settings.host == "127.0.0.1"
         assert server.mcp.settings.port == 9999
         assert server.mcp.settings.streamable_http_path == "/mcp"

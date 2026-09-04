@@ -941,7 +941,15 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    mcp.run(transport="sse" if args.transport == "sse" else "streamable-http")
+    transport = "sse" if args.transport == "sse" else "streamable-http"
+    mcp.run(
+        transport=transport,
+        host=args.host,
+        port=args.port,
+        path=args.path,
+        stateless_http=True,
+        json_response=False,
+    )
 
 
 if __name__ == "__main__":
