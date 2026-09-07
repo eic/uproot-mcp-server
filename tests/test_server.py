@@ -610,6 +610,21 @@ class TestTransportCli:
         finally:
             server.mcp.settings = original
 
+    def test_http_path_gets_a_leading_slash(self, monkeypatch):
+        """Starlette mounts need one; '--path custom' must not crash the app."""
+        monkeypatch.setattr(server.mcp, "run", lambda **kw: None)
+        monkeypatch.setattr(
+            sys, "argv",
+            ["uproot-mcp-server", "--transport", "http", "--path", "custom"],
+        )
+        original = server.mcp.settings.model_copy(deep=True)
+        try:
+            server.main()
+            assert server.mcp.settings.streamable_http_path == "/custom"
+            assert [r.path for r in server.mcp.streamable_http_app().routes] == ["/custom"]
+        finally:
+            server.mcp.settings = original
+
     def test_stdio_is_default(self, monkeypatch):
         calls = {}
         monkeypatch.setattr(server.mcp, "run", self._record_run(calls))

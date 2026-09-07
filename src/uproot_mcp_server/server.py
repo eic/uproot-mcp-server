@@ -941,7 +941,7 @@ def main() -> None:
         mcp.run(transport="sse")
         return
 
-    mcp.settings.streamable_http_path = args.path
+    mcp.settings.streamable_http_path = "/" + args.path.lstrip("/")
     # Stateless: the JobStore is process-wide, not session-scoped, so clients
     # can reconnect freely without losing async jobs.
     mcp.settings.stateless_http = True
