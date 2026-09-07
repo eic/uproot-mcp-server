@@ -70,7 +70,7 @@ pip install -e ".[xrootd]"
 - `uproot` ≥ 5.0
 - `numpy` ≥ 1.26.4
 - `awkward` ≥ 2.0
-- `mcp` ≥ 1.10, < 2
+- `mcp` ≥ 1.10, < 3
 - `RestrictedPython` ≥ 8.1
 - *(optional)* `xrootd` ≥ 5.4 — required for `root://` URLs
 

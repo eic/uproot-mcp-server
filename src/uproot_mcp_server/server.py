@@ -16,7 +16,10 @@ import argparse
 import sys
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ModuleNotFoundError:  # mcp 2.x
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
 from uproot_mcp_server import analysis, sandbox
 from uproot_mcp_server.jobs import JobStore
@@ -919,14 +922,11 @@ def main() -> None:
         help="URL path the streamable-HTTP endpoint is served on (default: /mcp).",
     )
     args = parser.parse_args()
+    streamable_http_path = "/" + args.path.lstrip("/")
 
     if args.transport == "stdio":
         mcp.run(transport="stdio")
         return
-
-    # Set post-construction so FASTMCP_* env vars / .env cannot override the CLI.
-    mcp.settings.host = args.host
-    mcp.settings.port = args.port
 
     if args.host not in {"127.0.0.1", "::1", "localhost"}:
         print(
@@ -936,17 +936,36 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    # FastMCP.run() takes only transport/mount_path; the rest goes via settings.
+    # mcp 1.x configures host/port/path via settings; mcp 2.x passes them to run().
+    has_legacy_settings = hasattr(mcp.settings, "host")
+    if has_legacy_settings:
+        # Set post-construction so FASTMCP_* env vars / .env cannot override the CLI.
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        mcp.settings.streamable_http_path = streamable_http_path
+        # Stateless: the JobStore is process-wide, not session-scoped, so clients
+        # can reconnect freely without losing async jobs.
+        mcp.settings.stateless_http = True
+        mcp.settings.json_response = False
+
     if args.transport == "sse":
-        mcp.run(transport="sse")
+        if has_legacy_settings:
+            mcp.run(transport="sse")
+        else:
+            mcp.run(transport="sse", host=args.host, port=args.port)
         return
 
-    mcp.settings.streamable_http_path = "/" + args.path.lstrip("/")
-    # Stateless: the JobStore is process-wide, not session-scoped, so clients
-    # can reconnect freely without losing async jobs.
-    mcp.settings.stateless_http = True
-    mcp.settings.json_response = False
-    mcp.run(transport="streamable-http")
+    if has_legacy_settings:
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run(
+            transport="streamable-http",
+            host=args.host,
+            port=args.port,
+            streamable_http_path=streamable_http_path,
+            stateless_http=True,
+            json_response=False,
+        )
 
 
 if __name__ == "__main__":
