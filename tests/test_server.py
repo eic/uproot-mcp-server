@@ -22,6 +22,10 @@ FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
 LOCAL_FILE = str(FIXTURE_DIR / "test_eic.root")
 
 
+def _uses_legacy_fastmcp_settings() -> bool:
+    return hasattr(server.mcp.settings, "host")
+
+
 def _is_json_serialisable(obj: object) -> bool:
     try:
         json.dumps(obj)
@@ -588,42 +592,54 @@ class TestTransportCli:
             ["uproot-mcp-server", "--transport", "http", "--port", "9999"],
         )
         server.main()
-        assert calls == {"transport": "streamable-http"}
-        assert server.mcp.settings.host == "127.0.0.1"
-        assert server.mcp.settings.port == 9999
-        assert server.mcp.settings.streamable_http_path == "/mcp"
-        assert server.mcp.settings.stateless_http is True
+        if _uses_legacy_fastmcp_settings():
+            assert calls == {"transport": "streamable-http"}
+            assert server.mcp.settings.host == "127.0.0.1"
+            assert server.mcp.settings.port == 9999
+            assert server.mcp.settings.streamable_http_path == "/mcp"
+            assert server.mcp.settings.stateless_http is True
+        else:
+            assert calls == {
+                "transport": "streamable-http",
+                "host": "127.0.0.1",
+                "port": 9999,
+                "streamable_http_path": "/mcp",
+                "stateless_http": True,
+                "json_response": False,
+            }
 
     def test_http_flags_reach_the_served_app(self, monkeypatch):
-        """Settings shape the app FastMCP actually serves."""
-        monkeypatch.setattr(server.mcp, "run", lambda **kw: None)
+        """Transport options should include the served app path."""
+        calls = {}
+        monkeypatch.setattr(server.mcp, "run", self._record_run(calls))
         monkeypatch.setattr(
             sys, "argv",
             ["uproot-mcp-server", "--transport", "http", "--path", "/custom"],
         )
-        original = server.mcp.settings.model_copy(deep=True)
-        try:
-            server.main()
+        server.main()
+        if _uses_legacy_fastmcp_settings():
             app = server.mcp.streamable_http_app()
             assert [r.path for r in app.routes] == ["/custom"]
             assert server.mcp.session_manager.stateless is True
-        finally:
-            server.mcp.settings = original
+        else:
+            assert calls["transport"] == "streamable-http"
+            assert calls["streamable_http_path"] == "/custom"
+            assert calls["stateless_http"] is True
 
     def test_http_path_gets_a_leading_slash(self, monkeypatch):
         """Starlette mounts need one; '--path custom' must not crash the app."""
-        monkeypatch.setattr(server.mcp, "run", lambda **kw: None)
+        calls = {}
+        monkeypatch.setattr(server.mcp, "run", self._record_run(calls))
         monkeypatch.setattr(
             sys, "argv",
             ["uproot-mcp-server", "--transport", "http", "--path", "custom"],
         )
-        original = server.mcp.settings.model_copy(deep=True)
-        try:
-            server.main()
+        server.main()
+        if _uses_legacy_fastmcp_settings():
             assert server.mcp.settings.streamable_http_path == "/custom"
             assert [r.path for r in server.mcp.streamable_http_app().routes] == ["/custom"]
-        finally:
-            server.mcp.settings = original
+        else:
+            assert calls["streamable_http_path"] == "/custom"
 
     def test_stdio_is_default(self, monkeypatch):
         calls = {}
@@ -640,7 +656,10 @@ class TestTransportCli:
             ["uproot-mcp-server", "--transport", "sse", "--host", "localhost", "--port", "9998"],
         )
         server.main()
-        assert calls == {"transport": "sse"}
-        assert server.mcp.settings.host == "localhost"
-        assert server.mcp.settings.port == 9998
-        assert server.mcp.settings.streamable_http_path == "/mcp"
+        if _uses_legacy_fastmcp_settings():
+            assert calls == {"transport": "sse"}
+            assert server.mcp.settings.host == "localhost"
+            assert server.mcp.settings.port == 9998
+            assert server.mcp.settings.streamable_http_path == "/mcp"
+        else:
+            assert calls == {"transport": "sse", "host": "localhost", "port": 9998}
