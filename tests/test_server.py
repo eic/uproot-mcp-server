@@ -23,7 +23,8 @@ LOCAL_FILE = str(FIXTURE_DIR / "test_eic.root")
 
 
 def _uses_legacy_fastmcp_settings() -> bool:
-    return hasattr(server.mcp.settings, "host")
+    settings = getattr(server.mcp, "settings", None)
+    return settings is not None and hasattr(settings, "host")
 
 
 def _is_json_serialisable(obj: object) -> bool:
@@ -647,6 +648,29 @@ class TestTransportCli:
         monkeypatch.setattr(sys, "argv", ["uproot-mcp-server"])
         server.main()
         assert calls == {"transport": "stdio"}
+
+    def test_no_settings_attribute_uses_run_kwargs(self, monkeypatch):
+        calls = {}
+
+        class NoSettingsMcp:
+            def run(self, **kwargs):
+                calls.update(kwargs)
+
+        monkeypatch.setattr(server, "mcp", NoSettingsMcp())
+        monkeypatch.setattr(
+            sys, "argv",
+            ["uproot-mcp-server", "--transport", "http", "--port", "9997"],
+        )
+
+        server.main()
+        assert calls == {
+            "transport": "streamable-http",
+            "host": "127.0.0.1",
+            "port": 9997,
+            "streamable_http_path": "/mcp",
+            "stateless_http": True,
+            "json_response": False,
+        }
 
     def test_sse_transport_flags(self, monkeypatch):
         calls = {}
