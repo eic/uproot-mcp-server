@@ -937,16 +937,17 @@ def main() -> None:
         )
 
     # mcp 1.x configures host/port/path via settings; mcp 2.x passes them to run().
-    has_legacy_settings = hasattr(mcp.settings, "host")
+    settings = getattr(mcp, "settings", None)
+    has_legacy_settings = settings is not None and hasattr(settings, "host")
     if has_legacy_settings:
         # Set post-construction so FASTMCP_* env vars / .env cannot override the CLI.
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
-        mcp.settings.streamable_http_path = streamable_http_path
+        settings.host = args.host
+        settings.port = args.port
+        settings.streamable_http_path = streamable_http_path
         # Stateless: the JobStore is process-wide, not session-scoped, so clients
         # can reconnect freely without losing async jobs.
-        mcp.settings.stateless_http = True
-        mcp.settings.json_response = False
+        settings.stateless_http = True
+        settings.json_response = False
 
     if args.transport == "sse":
         if has_legacy_settings:
