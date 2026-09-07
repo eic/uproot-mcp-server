@@ -16,7 +16,10 @@ import argparse
 import sys
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ModuleNotFoundError:  # mcp 2.x
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
 from uproot_mcp_server import analysis, sandbox
 from uproot_mcp_server.jobs import JobStore

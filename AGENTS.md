@@ -7,7 +7,7 @@ This document provides guidance for AI agents (GitHub Copilot, Claude, ChatGPT, 
 **uproot MCP Server** - A Model Context Protocol server that provides LLMs access to ROOT file analysis via [uproot](https://uproot.readthedocs.io/) for the EIC (Electron-Ion Collider) project.
 
 - **Language**: Python (≥ 3.10)
-- **MCP framework**: `mcp>=1.10,<2` (FastMCP)
+- **MCP framework**: `mcp>=1.10,<3` (FastMCP 1.x / MCPServer 2.x compatible)
 - **Core libraries**: `uproot>=5.0`, `numpy>=1.26.4`, `awkward>=2.0`, `RestrictedPython>=8.1`
 - **Purpose**: ROOT file structure inspection, branch statistics, and histogramming for scientific computing
 - **Target**: HEP (High Energy Physics) / Nuclear Physics data analysis workflows
