@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "uproot-mcp-server"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for uproot-based ROOT file analysis in EIC data analysis workflows"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.10,<2",
     "uproot>=5.0.0",
     "numpy>=1.26.4",
     "awkward>=2.0.0",
