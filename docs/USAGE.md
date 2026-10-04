@@ -113,7 +113,7 @@ Pass an absolute or relative filesystem path:
 Pass an XRootD URL.  The optional `xrootd` dependency must be installed:
 
 ```json
-{ "file_path": "root://dtn-eic.jlab.org//work/eic2/EPIC/RECO/24.07.0/epic_craterlake/DIS/NC/18x275/q2_0.001_1.0/pythia8NCDIS_18x275.root" }
+{ "file_path": "root://dtn2304.jlab.org:8443//jlab-osdf-ro/work/eic2/EPIC/RECO/24.07.0/epic_craterlake/DIS/NC/18x275/q2_0.001_1.0/pythia8NCDIS_18x275.root" }
 ```
 
 ## Example workflow
@@ -164,6 +164,6 @@ pytest tests/ -v
 Set `UPROOT_TEST_REMOTE_FILE` to an XRootD URL to enable remote-file tests:
 
 ```bash
-export UPROOT_TEST_REMOTE_FILE="root://dtn-eic.jlab.org//work/eic2/EPIC/RECO/24.07.0/..."
+export UPROOT_TEST_REMOTE_FILE="root://dtn2304.jlab.org:8443//jlab-osdf-ro/work/eic2/EPIC/RECO/24.07.0/..."
 pytest tests/ -v
 ```

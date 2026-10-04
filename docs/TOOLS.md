@@ -178,7 +178,7 @@ It can be used directly by the client for plotting or further analysis.
 
 ```json
 {
-  "file_path": "root://dtn-eic.jlab.org//path/to/file.root",
+  "file_path": "root://dtn2304.jlab.org:8443//jlab-osdf-ro/path/to/file.root",
   "tree_name": "events",
   "branch_name": "MCParticles.momentum.x",
   "bins": 100,
@@ -192,7 +192,7 @@ It can be used directly by the client for plotting or further analysis.
 
 ```json
 {
-  "file_path": "root://dtn-eic.jlab.org//path/to/file.root",
+  "file_path": "root://dtn2304.jlab.org:8443//jlab-osdf-ro/path/to/file.root",
   "tree_name": "events",
   "branch_name": "MCParticles.momentum.x",
   "cut": "MCParticles.charge != 0",
@@ -264,7 +264,7 @@ It may return:
 
 ```json
 {
-  "file_path": "root://dtn-eic.jlab.org//path/to/file.root",
+  "file_path": "root://dtn2304.jlab.org:8443//jlab-osdf-ro/path/to/file.root",
   "tree_name": "events",
   "kernel_code": "def kernel(events):\n    px = events['ReconstructedParticles.momentum.x']\n    py = events['ReconstructedParticles.momentum.y']\n    pz = events['ReconstructedParticles.momentum.z']\n    return np.sqrt(px**2 + py**2 + pz**2)\n",
   "branches": [
@@ -288,7 +288,7 @@ It may return:
   "page_size": 1000,
   "page_count": 10,
   "has_more": true,
-  "file_path": "root://dtn-eic.jlab.org//path/to/file.root",
+  "file_path": "root://dtn2304.jlab.org:8443//jlab-osdf-ro/path/to/file.root",
   "tree_name": "events",
   "branches": ["ReconstructedParticles.momentum.x", "..."],
   "cut": null,

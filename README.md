@@ -188,7 +188,7 @@ Produces a 1-D histogram of a branch with optional selection, configurable bins,
 
 ```json
 {
-  "file_path": "root://dtn-eic.jlab.org//path/to/file.root",
+  "file_path": "root://dtn2304.jlab.org:8443//jlab-osdf-ro/path/to/file.root",
   "tree_name": "events",
   "branch_name": "MCParticles.momentum.x",
   "bins": 100,
@@ -270,7 +270,7 @@ Set the `UPROOT_TEST_REMOTE_FILE` environment variable to an XRootD URL to enabl
 remote file tests:
 
 ```bash
-export UPROOT_TEST_REMOTE_FILE="root://dtn-eic.jlab.org//work/eic2/EPIC/RECO/24.07.0/epic_craterlake/DIS/NC/18x275/q2_0.001_1.0/pythia8NCDIS_18x275_minQ2=0.001_beamEffects_xAngle=-0.025_hiDiv_1.0000.eicrecon.tree.edm4eic.root"
+export UPROOT_TEST_REMOTE_FILE="root://dtn2304.jlab.org:8443//jlab-osdf-ro/work/eic2/EPIC/RECO/24.07.0/epic_craterlake/DIS/NC/18x275/q2_0.001_1.0/pythia8NCDIS_18x275_minQ2=0.001_beamEffects_xAngle=-0.025_hiDiv_1.0000.eicrecon.tree.edm4eic.root"
 pytest tests/ -v
 ```
 
