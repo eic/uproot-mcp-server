@@ -2,7 +2,7 @@
 
 These tests run against:
 1. A local synthetic ROOT file in tests/fixtures/test_eic.root
-2. (Optional) A remote XRootD file at dtn-eic.jlab.org if the
+2. (Optional) A remote XRootD file at dtn2304.jlab.org:8443 if the
    UPROOT_TEST_REMOTE_FILE environment variable is set.
 
 The local tests always run.  Remote tests are skipped when the environment

@@ -77,7 +77,7 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> dict[str, Any
     ----------
     file_path:
         Local filesystem path **or** XRootD URL, e.g.
-        ``root://dtn-eic.jlab.org//path/to/file.root``.
+        ``root://dtn2304.jlab.org:8443//jlab-osdf-ro/path/to/file.root``.
     max_branches:
         Maximum number of branches listed per tree (default 100; must be >= 0).
         An EDM4eic file holds thousands of branches, so an unbounded listing runs

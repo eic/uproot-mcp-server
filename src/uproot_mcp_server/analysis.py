@@ -677,7 +677,7 @@ def _candidate_paths(path: str) -> list[str]:
                 "'root://host//absolute/path/pattern'."
             )
         prefix_end = second_slashes + 2  # past the second //
-        server_part = path[:prefix_end]  # e.g. "root://dtn-eic.jlab.org//"
+        server_part = path[:prefix_end]  # e.g. "root://dtn2304.jlab.org:8443//"
         dir_and_pattern = path[prefix_end:]  # e.g. "work/eic2/EPIC/*.root"
 
         # Separate directory and filename pattern

@@ -181,8 +181,8 @@ python -m pytest tests/ -v
 # Run a specific test class
 python -m pytest tests/test_analysis.py::TestGetFileStructure -v
 
-# Run remote integration tests (requires network access to dtn-eic.jlab.org)
-export UPROOT_TEST_REMOTE_FILE="root://dtn-eic.jlab.org//work/eic2/EPIC/RECO/..."
+# Run remote integration tests (requires network access to dtn2304.jlab.org:8443)
+export UPROOT_TEST_REMOTE_FILE="root://dtn2304.jlab.org:8443//jlab-osdf-ro/work/eic2/EPIC/RECO/..."
 python -m pytest tests/ -v
 ```
 
@@ -243,7 +243,7 @@ events (TTree)
 ### File Locations (via xrootd-mcp-server)
 
 ```
-root://dtn-eic.jlab.org//work/eic2/EPIC/RECO/{campaign}/
+root://dtn2304.jlab.org:8443//jlab-osdf-ro/work/eic2/EPIC/RECO/{campaign}/
   epic_craterlake/{process_type}/{process}/{generator}/{beams}/{q2_bin}/{particle}/
     *.eicrecon.tree.edm4eic.root
 ```
@@ -275,7 +275,7 @@ root://dtn-eic.jlab.org//work/eic2/EPIC/RECO/{campaign}/
 4. **Remote file hangs / times out**
    - XRootD must be installed: `pip install -e ".[xrootd]"`
    - Verify URL format: `root://server//absolute/path/to/file.root` (double slash)
-   - Check VPN / firewall access to `dtn-eic.jlab.org`
+   - Check VPN / firewall access to `dtn2304.jlab.org:8443`
 
 5. **`ModuleNotFoundError: No module named 'uproot_mcp_server'`**
    - Install in editable mode: `pip install -e .`
