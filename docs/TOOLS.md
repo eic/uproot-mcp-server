@@ -6,7 +6,10 @@ values (`NaN`, `±Inf`) are normalised to `null` before serialisation.
 
 Every tool that reads data also takes `timeout` (seconds; default 60, dataset
 tools 300) and returns an `error` string naming the tool and the limit on
-expiry.
+expiry.  Lists that grow with the data stop at 1000 entries (`max_branches`
+for branch listings) and the result then carries a `truncated` note of the
+form `"truncated: N of M branches; raise max_branches"`; a result over 1 MB
+is replaced by an `error` with the same advice.
 
 ---
 
