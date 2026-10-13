@@ -53,6 +53,10 @@ mcp = FastMCP(
 
 _job_store = JobStore()
 
+# Worker threads for tool calls. A timed-out call keeps its worker busy until
+# the read finishes, so the pool bounds how many such reads can pile up.
+_tool_executor = ThreadPoolExecutor(max_workers=4)
+
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -89,9 +93,10 @@ def _failure_message(exc: Exception, context: dict[str, Any]) -> str:
             f"File not found: {path}. Check the path or URL; "
             "get_dataset_file_list shows which files exist."
         )
-    if isinstance(exc, KeyError):
+    if isinstance(exc, KeyError) or "not found in tree" in first_line:
+        what = f"Key {first_line}" if isinstance(exc, KeyError) else first_line
         return (
-            f"Key {first_line}. Use get_file_structure for the tree names and "
+            f"{what}. Use get_file_structure for the tree names and "
             "get_tree_info for the branch names."
         )
     if "timed out" in first_line:
@@ -112,12 +117,11 @@ def _run_tool(
 
     Returns the JSON-safe result, or ``{"error": ..., **context}`` when the
     call times out or fails.
-    The worker thread cannot be interrupted, so an expired call keeps running
-    in the background until the read finishes.
+    The worker thread cannot be interrupted, so an expired call keeps its
+    worker busy until the read finishes; once all workers are busy, new calls
+    wait and time out.
     """
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(function, *args, **kwargs)
-    executor.shutdown(wait=False)
+    future = _tool_executor.submit(function, *args, **kwargs)
     try:
         result = _json_safe(future.result(timeout=timeout))
     except FutureTimeoutError:
@@ -634,6 +638,7 @@ def estimate_dataset_cost(
         {"file_paths": file_paths, "tree_name": tree_name, "branches": branches},
         file_paths, tree_name, kernel_code, branches,
         sample_files=sample_files, entries_per_file=entries_per_file,
+        timeout=timeout,
     )
 
 

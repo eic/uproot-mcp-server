@@ -1352,7 +1352,7 @@ def run_kernel_dataset(
         from uproot_mcp_server.sandbox import execute_reduce as _execute_reduce  # noqa: PLC0415
         reduced: Any = partial_results[0]
         for r in partial_results[1:]:
-            reduced = _execute_reduce(reduce_code_obj, reduced, r)
+            reduced = _execute_reduce(reduce_code_obj, reduced, r, timeout=timeout)
         # Format the single reduced result
         if isinstance(reduced, (ak.Array, np.ndarray)):
             flat = (
@@ -1435,6 +1435,7 @@ def estimate_dataset_cost(
     *,
     sample_files: int = 3,
     entries_per_file: int = 1000,
+    timeout: float = 30.0,
 ) -> dict[str, Any]:
     """Measure kernel performance on a sample and extrapolate to the full dataset.
 
@@ -1455,6 +1456,8 @@ def estimate_dataset_cost(
         Number of files to sample (default 3).
     entries_per_file:
         Maximum entries per sample file (default 1000).
+    timeout:
+        Wall-clock limit in seconds for each sample kernel run (default 30).
 
     Returns
     -------
@@ -1490,7 +1493,7 @@ def estimate_dataset_cost(
             actual = int(f[tree_name].num_entries)
         entries_this_file = min(entries_per_file, actual)
         sample_entries += entries_this_file
-        run_kernel(fp, tree_name, kernel_code, branches, entry_stop=entries_per_file)
+        run_kernel(fp, tree_name, kernel_code, branches, entry_stop=entries_per_file, timeout=timeout)
     sample_elapsed_s = time.perf_counter() - t_sample_start
 
     elapsed_s = time.perf_counter() - t_start

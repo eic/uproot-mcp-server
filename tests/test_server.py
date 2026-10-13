@@ -12,6 +12,7 @@ from __future__ import annotations
 import inspect
 import json
 import sys
+import time
 import pathlib
 
 import pytest
@@ -90,6 +91,20 @@ class TestServerLimits:
         result = server.get_tree_info(LOCAL_FILE, "no_such_tree")
         assert "\n" not in result["error"]
         assert "get_file_structure" in result["error"]
+
+    def test_missing_branch_message_names_get_tree_info(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", "result = px", ["no_such_branch"])
+        assert "no_such_branch" in result["error"]
+        assert "get_tree_info" in result["error"]
+
+    def test_estimate_dataset_cost_forwards_timeout(self):
+        started = time.perf_counter()
+        result = server.estimate_dataset_cost(
+            [LOCAL_FILE], "events", "while True:\n    pass\nresult = 1", ["px"],
+            sample_files=1, entries_per_file=10, timeout=1,
+        )
+        assert "error" in result
+        assert time.perf_counter() - started < 5
 
 
 # ---------------------------------------------------------------------------
