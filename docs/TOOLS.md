@@ -4,6 +4,10 @@ The uproot MCP Server exposes four tools for reading and analysing ROOT files.
 All tools return JSON-serialisable dictionaries.  Non-finite floating-point
 values (`NaN`, `±Inf`) are normalised to `null` before serialisation.
 
+Every tool that reads data also takes `timeout` (seconds; default 60, dataset
+tools 300) and returns an `error` string naming the tool and the limit on
+expiry.
+
 ---
 
 ## `get_file_structure`
@@ -230,7 +234,7 @@ The following are **blocked**:
 | `exec`, `eval`, `open`, `compile` | Not present in restricted builtins |
 | Dunder attribute access (`obj.__class__`, etc.) | Rejected at AST compile time |
 | Writes to `np` / `ak` modules | `_write_` guard raises `AttributeError` |
-| Infinite loops / long-running code | 30-second wall-clock timeout; subprocess is forcefully terminated (SIGTERM then SIGKILL) |
+| Infinite loops / long-running code | wall-clock `timeout` (default 60 s); subprocess is forcefully terminated (SIGTERM then SIGKILL) |
 
 Available inside kernels: `np` (numpy), `ak` (awkward-array), and a safe subset of
 built-ins: `len`, `range`, `list`, `dict`, `tuple`, `set`, `int`, `float`, `bool`, `str`,
@@ -309,7 +313,10 @@ Clients should check for the presence of the `"error"` key in the response:
 
 ```json
 {
-  "error": "File not found: /data/missing.root",
+  "error": "File not found: /data/missing.root. Check the path or URL; get_dataset_file_list shows which files exist.",
   "file_path": "/data/missing.root"
 }
 ```
+
+A timeout reads `"<tool> did not finish within N s. Try a smaller entry range ...,
+or a larger timeout. The server handles one call at a time ..., so retry once later."`
