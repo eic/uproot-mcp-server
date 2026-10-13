@@ -251,7 +251,15 @@ The kernel receives a `dict[branch_name, array]` and may return an array, scalar
 
 For scalar or dict results, `result_type` is `"scalar"` or `"dict"` and pagination fields are absent.
 
-**Execution timeout:** kernels run in an isolated subprocess that is forcefully terminated (SIGTERM then SIGKILL) after 30 seconds of wall-clock time.
+**Execution timeout:** kernels run in an isolated subprocess that is forcefully terminated (SIGTERM then SIGKILL) after the tool's `timeout`.
+
+### Timeouts and errors
+
+Every tool that reads data takes `timeout` (seconds; default 60, dataset tools 300).
+On expiry the tool returns `{"error": "<tool> did not finish within N s. ..."}` with
+what to try (smaller entry range, fewer files, retry once later: the server handles one
+call at a time). Expected failures (missing file, tree or branch) come back as an
+`error` string that names the tool to call next.
 
 ## Development
 

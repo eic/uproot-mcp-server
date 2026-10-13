@@ -541,6 +541,7 @@ def run_kernel(
     entry_stop: int | None = None,
     page: int = 0,
     page_size: int = 1000,
+    timeout: float = 30.0,
 ) -> KernelResult:
     """Load branches from a ROOT file and execute a sandboxed kernel.
 
@@ -567,6 +568,8 @@ def run_kernel(
         0-indexed page number for array-like results (default 0).
     page_size:
         Elements per page for array-like results (default 1000).
+    timeout:
+        Wall-clock limit in seconds for the kernel subprocess (default 30).
 
     Returns
     -------
@@ -613,7 +616,7 @@ def run_kernel(
         branches_data: dict[str, Any] = {b: arrays_ak[b] for b in branches}
 
     t1 = time.perf_counter()
-    result = _execute_kernel(code_obj, branches_data)
+    result = _execute_kernel(code_obj, branches_data, timeout=timeout)
     t2 = time.perf_counter()
 
     kernel_elapsed_s = round(t2 - t1, 6)
@@ -1241,6 +1244,7 @@ def run_kernel_dataset(
     workers: int = 4,
     page: int = 0,
     page_size: int = 1000,
+    timeout: float = 30.0,
 ) -> KernelResult:
     """Run a sandboxed kernel over multiple files and auto-reduce the results.
 
@@ -1272,6 +1276,9 @@ def run_kernel_dataset(
         0-indexed page for array results (default 0).
     page_size:
         Elements per page for array results (default 1000).
+    timeout:
+        Wall-clock limit in seconds for each per-file kernel subprocess
+        (default 30).
 
     Returns
     -------
@@ -1315,7 +1322,7 @@ def run_kernel_dataset(
                     arrays_kwargs["cut"] = cut
                 arrays_ak = tree.arrays(branches, library="ak", **arrays_kwargs)
                 branches_data: dict[str, Any] = {b: arrays_ak[b] for b in branches}
-            result = _execute_kernel(code_obj, branches_data)
+            result = _execute_kernel(code_obj, branches_data, timeout=timeout)
             partial_results.append(result)
         except Exception:  # noqa: BLE001
             failed_files.append(fp)

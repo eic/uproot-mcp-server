@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any
 
 try:
@@ -23,6 +25,14 @@ except ModuleNotFoundError:  # mcp 2.x
 
 from uproot_mcp_server import analysis, sandbox
 from uproot_mcp_server.jobs import JobStore
+
+# ---------------------------------------------------------------------------
+# Limits
+# ---------------------------------------------------------------------------
+
+# Wall-clock limit per tool call, in seconds; dataset tools get a longer one.
+DEFAULT_TIMEOUT_SECONDS = 60.0
+DEFAULT_DATASET_TIMEOUT_SECONDS = 300.0
 
 # ---------------------------------------------------------------------------
 # Server setup
@@ -61,12 +71,72 @@ def _json_safe(obj: Any) -> Any:
     return obj
 
 
+def _timeout_message(tool_name: str, timeout: float) -> str:
+    return (
+        f"{tool_name} did not finish within {timeout:g} s. Try a smaller entry "
+        "range (entry_start/entry_stop or entries_per_file), fewer files or "
+        "branches, or a larger timeout. The server handles one call at a time "
+        "and the interrupted read may still be finishing, so retry once later."
+    )
+
+
+def _failure_message(exc: Exception, context: dict[str, Any]) -> str:
+    """Describe an expected failure and what to do about it."""
+    first_line = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+    if isinstance(exc, FileNotFoundError):
+        path = exc.filename or context.get("file_path") or context.get("path") or first_line
+        return (
+            f"File not found: {path}. Check the path or URL; "
+            "get_dataset_file_list shows which files exist."
+        )
+    if isinstance(exc, KeyError):
+        return (
+            f"Key {first_line}. Use get_file_structure for the tree names and "
+            "get_tree_info for the branch names."
+        )
+    if "timed out" in first_line:
+        return f"{first_line}. Raise timeout or reduce the entry range."
+    return first_line
+
+
+def _run_tool(
+    tool_name: str,
+    function: Any,
+    timeout: float,
+    context: dict[str, Any],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Run ``function(*args, **kwargs)`` in a worker thread under *timeout*.
+
+    Returns the JSON-safe result, or ``{"error": ..., **context}`` when the
+    call times out or fails.
+    The worker thread cannot be interrupted, so an expired call keeps running
+    in the background until the read finishes.
+    """
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(function, *args, **kwargs)
+    executor.shutdown(wait=False)
+    try:
+        result = _json_safe(future.result(timeout=timeout))
+    except FutureTimeoutError:
+        return {"error": _timeout_message(tool_name, timeout), **context}
+    except Exception as exc:
+        return {"error": _failure_message(exc, context), **context}
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def get_file_structure(file_path: str, max_branches: int = 100) -> dict[str, Any]:
+def get_file_structure(
+    file_path: str,
+    max_branches: int = 100,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     """Return the top-level structure of a ROOT file.
 
     Lists all keys stored in the file and provides a summary of every TTree
@@ -82,6 +152,8 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> dict[str, Any
         Maximum number of branches listed per tree (default 100; must be >= 0).
         An EDM4eic file holds thousands of branches, so an unbounded listing runs
         to megabytes; call ``get_tree_info`` for the complete set.
+    timeout:
+        Wall-clock limit in seconds (default 60).
 
     Returns
     -------
@@ -94,15 +166,19 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> dict[str, Any
       and a ``branches`` list, capped at ``max_branches``, with basic per-branch
       metadata
     """
-    try:
-        result = analysis.get_file_structure(file_path, max_branches=max_branches)
-        return _json_safe(result)
-    except Exception as exc:
-        return {"error": str(exc), "file_path": file_path, "max_branches": max_branches}
+    return _run_tool(
+        "get_file_structure", analysis.get_file_structure, timeout,
+        {"file_path": file_path, "max_branches": max_branches},
+        file_path, max_branches=max_branches,
+    )
 
 
 @mcp.tool()
-def get_tree_info(file_path: str, tree_name: str) -> dict[str, Any]:
+def get_tree_info(
+    file_path: str,
+    tree_name: str,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     """Return detailed metadata for a single TTree including all branches and leaves.
 
     Parameters
@@ -111,6 +187,8 @@ def get_tree_info(file_path: str, tree_name: str) -> dict[str, Any]:
         Local path or XRootD URL to the ROOT file.
     tree_name:
         Name of the TTree to inspect (e.g. ``"events"`` or ``"events;1"``).
+    timeout:
+        Wall-clock limit in seconds (default 60).
 
     Returns
     -------
@@ -125,11 +203,11 @@ def get_tree_info(file_path: str, tree_name: str) -> dict[str, Any]:
         - ``uncompressed_bytes``, ``compressed_bytes``, ``compression_ratio``
         - ``leaves``: list of leaf dicts (``name``, ``typename``)
     """
-    try:
-        result = analysis.get_tree_info(file_path, tree_name)
-        return _json_safe(result)
-    except Exception as exc:
-        return {"error": str(exc), "file_path": file_path, "tree_name": tree_name}
+    return _run_tool(
+        "get_tree_info", analysis.get_tree_info, timeout,
+        {"file_path": file_path, "tree_name": tree_name},
+        file_path, tree_name,
+    )
 
 
 @mcp.tool()
@@ -140,6 +218,7 @@ def get_branch_statistics(
     cut: str | None = None,
     entry_start: int | None = None,
     entry_stop: int | None = None,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Compute summary statistics for a single branch.
 
@@ -160,6 +239,8 @@ def get_branch_statistics(
         Only entries where the expression is True are included.
     entry_start, entry_stop:
         Integer indices to slice the tree (Python-style).
+    timeout:
+        Wall-clock limit in seconds (default 60).
 
     Returns
     -------
@@ -171,23 +252,12 @@ def get_branch_statistics(
     - ``num_nan``, ``num_inf``: counts of non-finite values
     - ``file_path``, ``tree_name``, ``branch_name``, ``cut``
     """
-    try:
-        result = analysis.get_branch_statistics(
-            file_path,
-            tree_name,
-            branch_name,
-            cut=cut,
-            entry_start=entry_start,
-            entry_stop=entry_stop,
-        )
-        return _json_safe(result)
-    except Exception as exc:
-        return {
-            "error": str(exc),
-            "file_path": file_path,
-            "tree_name": tree_name,
-            "branch_name": branch_name,
-        }
+    return _run_tool(
+        "get_branch_statistics", analysis.get_branch_statistics, timeout,
+        {"file_path": file_path, "tree_name": tree_name, "branch_name": branch_name},
+        file_path, tree_name, branch_name,
+        cut=cut, entry_start=entry_start, entry_stop=entry_stop,
+    )
 
 
 @mcp.tool()
@@ -201,6 +271,7 @@ def histogram_branch(
     cut: str | None = None,
     entry_start: int | None = None,
     entry_stop: int | None = None,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Histogram a branch with an optional selection cut.
 
@@ -225,6 +296,8 @@ def histogram_branch(
         (e.g. ``"MCParticles.charge != 0"``).
     entry_start, entry_stop:
         Integer indices to slice the tree.
+    timeout:
+        Wall-clock limit in seconds (default 60).
 
     Returns
     -------
@@ -238,26 +311,13 @@ def histogram_branch(
     - ``range_min``, ``range_max``: actual histogram range used
     - ``bins``, ``file_path``, ``tree_name``, ``branch_name``, ``cut``
     """
-    try:
-        result = analysis.histogram_branch(
-            file_path,
-            tree_name,
-            branch_name,
-            bins=bins,
-            range_min=range_min,
-            range_max=range_max,
-            cut=cut,
-            entry_start=entry_start,
-            entry_stop=entry_stop,
-        )
-        return _json_safe(result)
-    except Exception as exc:
-        return {
-            "error": str(exc),
-            "file_path": file_path,
-            "tree_name": tree_name,
-            "branch_name": branch_name,
-        }
+    return _run_tool(
+        "histogram_branch", analysis.histogram_branch, timeout,
+        {"file_path": file_path, "tree_name": tree_name, "branch_name": branch_name},
+        file_path, tree_name, branch_name,
+        bins=bins, range_min=range_min, range_max=range_max,
+        cut=cut, entry_start=entry_start, entry_stop=entry_stop,
+    )
 
 
 @mcp.tool()
@@ -271,6 +331,7 @@ def execute_kernel(
     entry_stop: int | None = None,
     page: int = 0,
     page_size: int = 1000,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Execute a sandboxed Python kernel over ROOT file branch data.
 
@@ -306,6 +367,9 @@ def execute_kernel(
         0-indexed page number for array-like results (default 0).
     page_size:
         Number of elements per page for array-like results (default 1000).
+    timeout:
+        Wall-clock limit in seconds for the whole call; the sandbox also stops
+        the kernel subprocess after this long (default 60).
 
     Returns
     -------
@@ -318,26 +382,13 @@ def execute_kernel(
     - Metadata: ``file_path``, ``tree_name``, ``branches``, ``cut``,
       ``entry_start``, ``entry_stop``
     """
-    try:
-        result = analysis.run_kernel(
-            file_path,
-            tree_name,
-            kernel_code,
-            branches,
-            cut=cut,
-            entry_start=entry_start,
-            entry_stop=entry_stop,
-            page=page,
-            page_size=page_size,
-        )
-        return _json_safe(result)
-    except Exception as exc:
-        return {
-            "error": str(exc),
-            "file_path": file_path,
-            "tree_name": tree_name,
-            "branches": branches,
-        }
+    return _run_tool(
+        "execute_kernel", analysis.run_kernel, timeout,
+        {"file_path": file_path, "tree_name": tree_name, "branches": branches},
+        file_path, tree_name, kernel_code, branches,
+        cut=cut, entry_start=entry_start, entry_stop=entry_stop,
+        page=page, page_size=page_size, timeout=timeout,
+    )
 
 
 @mcp.tool()
@@ -351,6 +402,7 @@ def histogram_dataset(
     cut: str | None = None,
     entries_per_file: int | None = None,
     workers: int = 4,
+    timeout: float = DEFAULT_DATASET_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Accumulate a 1-D histogram across many ROOT files.
 
@@ -380,6 +432,8 @@ def histogram_dataset(
         If set, read at most this many entries per file (useful for prototyping).
     workers:
         Number of threads for parallel file I/O (default 4).
+    timeout:
+        Wall-clock limit in seconds (default 300).
 
     Returns
     -------
@@ -396,26 +450,13 @@ def histogram_dataset(
     - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
     - ``elapsed_s``: total wall time in seconds
     """
-    try:
-        result = analysis.histogram_dataset(
-            file_paths,
-            tree_name,
-            branch_name,
-            bins=bins,
-            range_min=range_min,
-            range_max=range_max,
-            cut=cut,
-            entries_per_file=entries_per_file,
-            workers=workers,
-        )
-        return _json_safe(result)
-    except Exception as exc:
-        return {
-            "error": str(exc),
-            "file_paths": file_paths,
-            "tree_name": tree_name,
-            "branch_name": branch_name,
-        }
+    return _run_tool(
+        "histogram_dataset", analysis.histogram_dataset, timeout,
+        {"file_paths": file_paths, "tree_name": tree_name, "branch_name": branch_name},
+        file_paths, tree_name, branch_name,
+        bins=bins, range_min=range_min, range_max=range_max,
+        cut=cut, entries_per_file=entries_per_file, workers=workers,
+    )
 
 
 @mcp.tool()
@@ -426,6 +467,7 @@ def get_dataset_statistics(
     cut: str | None = None,
     entries_per_file: int | None = None,
     workers: int = 4,
+    timeout: float = DEFAULT_DATASET_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Compute mean/std/min/max across many ROOT files using Welford's algorithm.
 
@@ -447,6 +489,8 @@ def get_dataset_statistics(
         If set, read at most this many entries per file (useful for prototyping).
     workers:
         Number of threads for parallel file I/O (default 4).
+    timeout:
+        Wall-clock limit in seconds (default 300).
 
     Returns
     -------
@@ -460,23 +504,12 @@ def get_dataset_statistics(
     - ``failed_files``: list of ``{"file": ..., "error": ...}`` dicts
     - ``elapsed_s``: total wall time in seconds
     """
-    try:
-        result = analysis.get_dataset_statistics(
-            file_paths,
-            tree_name,
-            branch_name,
-            cut=cut,
-            entries_per_file=entries_per_file,
-            workers=workers,
-        )
-        return _json_safe(result)
-    except Exception as exc:
-        return {
-            "error": str(exc),
-            "file_paths": file_paths,
-            "tree_name": tree_name,
-            "branch_name": branch_name,
-        }
+    return _run_tool(
+        "get_dataset_statistics", analysis.get_dataset_statistics, timeout,
+        {"file_paths": file_paths, "tree_name": tree_name, "branch_name": branch_name},
+        file_paths, tree_name, branch_name,
+        cut=cut, entries_per_file=entries_per_file, workers=workers,
+    )
 
 
 @mcp.tool()
@@ -491,6 +524,7 @@ def execute_kernel_dataset(
     workers: int = 4,
     page: int = 0,
     page_size: int = 1000,
+    timeout: float = DEFAULT_DATASET_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Run a sandboxed kernel over multiple ROOT files and auto-reduce the results.
 
@@ -523,6 +557,9 @@ def execute_kernel_dataset(
         0-indexed page for array results (default 0).
     page_size:
         Elements per page for array results (default 1000).
+    timeout:
+        Wall-clock limit in seconds for the whole call; the sandbox also stops
+        each per-file kernel subprocess after this long (default 300).
 
     Returns
     -------
@@ -537,27 +574,13 @@ def execute_kernel_dataset(
       ``page_count``, ``has_more``
     - Scalar results additionally include: ``sum``, ``mean``
     """
-    try:
-        result = analysis.run_kernel_dataset(
-            file_paths,
-            tree_name,
-            kernel_code,
-            branches,
-            reduce_code=reduce_code,
-            cut=cut,
-            entries_per_file=entries_per_file,
-            workers=workers,
-            page=page,
-            page_size=page_size,
-        )
-        return _json_safe(result)
-    except Exception as exc:
-        return {
-            "error": str(exc),
-            "file_paths": file_paths,
-            "tree_name": tree_name,
-            "branches": branches,
-        }
+    return _run_tool(
+        "execute_kernel_dataset", analysis.run_kernel_dataset, timeout,
+        {"file_paths": file_paths, "tree_name": tree_name, "branches": branches},
+        file_paths, tree_name, kernel_code, branches,
+        reduce_code=reduce_code, cut=cut, entries_per_file=entries_per_file,
+        workers=workers, page=page, page_size=page_size, timeout=timeout,
+    )
 
 
 @mcp.tool()
@@ -568,6 +591,7 @@ def estimate_dataset_cost(
     branches: list[str],
     sample_files: int = 3,
     entries_per_file: int = 1000,
+    timeout: float = DEFAULT_DATASET_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Measure kernel performance on a sample and extrapolate to the full dataset.
 
@@ -588,6 +612,8 @@ def estimate_dataset_cost(
         Number of files to sample (default 3).
     entries_per_file:
         Maximum entries per sample file (default 1000).
+    timeout:
+        Wall-clock limit in seconds (default 300).
 
     Returns
     -------
@@ -603,23 +629,12 @@ def estimate_dataset_cost(
     - ``sample_elapsed_s``: wall time for all sample kernel executions
     - ``elapsed_s``: total wall time including metadata reads
     """
-    try:
-        result = analysis.estimate_dataset_cost(
-            file_paths,
-            tree_name,
-            kernel_code,
-            branches,
-            sample_files=sample_files,
-            entries_per_file=entries_per_file,
-        )
-        return _json_safe(result)
-    except Exception as exc:
-        return {
-            "error": str(exc),
-            "file_paths": file_paths,
-            "tree_name": tree_name,
-            "branches": branches,
-        }
+    return _run_tool(
+        "estimate_dataset_cost", analysis.estimate_dataset_cost, timeout,
+        {"file_paths": file_paths, "tree_name": tree_name, "branches": branches},
+        file_paths, tree_name, kernel_code, branches,
+        sample_files=sample_files, entries_per_file=entries_per_file,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -811,6 +826,7 @@ def get_dataset_file_list(
     path: str,
     tree_name: str,
     workers: int = 4,
+    timeout: float = DEFAULT_DATASET_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """List ROOT files matching a path pattern that contain a given TTree.
 
@@ -823,6 +839,8 @@ def get_dataset_file_list(
         Name of the TTree that must be present in each file.
     workers:
         Number of parallel threads for per-file metadata checks (default 4).
+    timeout:
+        Wall-clock limit in seconds (default 300).
 
     Returns
     -------
@@ -838,11 +856,11 @@ def get_dataset_file_list(
     - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
     - ``elapsed_s``: wall-clock seconds
     """
-    try:
-        result = analysis.get_dataset_file_list(path, tree_name, workers=workers)
-        return _json_safe(result)
-    except Exception as exc:
-        return {"error": str(exc), "path": path, "tree_name": tree_name, "workers": workers}
+    return _run_tool(
+        "get_dataset_file_list", analysis.get_dataset_file_list, timeout,
+        {"path": path, "tree_name": tree_name, "workers": workers},
+        path, tree_name, workers=workers,
+    )
 
 
 @mcp.tool()
@@ -851,6 +869,7 @@ def validate_dataset_schema(
     tree_name: str,
     branches: list[str],
     workers: int = 4,
+    timeout: float = DEFAULT_DATASET_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Verify that all files contain the expected TTree and branches.
 
@@ -864,6 +883,8 @@ def validate_dataset_schema(
         Branch names that must exist in the tree.
     workers:
         Number of parallel threads for per-file metadata reads (default 4).
+    timeout:
+        Wall-clock limit in seconds (default 300).
 
     Returns
     -------
@@ -879,13 +900,11 @@ def validate_dataset_schema(
     - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
     - ``elapsed_s``: wall-clock seconds
     """
-    try:
-        result = analysis.validate_dataset_schema(
-            file_paths, tree_name, branches, workers=workers
-        )
-        return _json_safe(result)
-    except Exception as exc:
-        return {"error": str(exc), "tree_name": tree_name, "file_paths": file_paths, "branches": branches}
+    return _run_tool(
+        "validate_dataset_schema", analysis.validate_dataset_schema, timeout,
+        {"tree_name": tree_name, "file_paths": file_paths, "branches": branches},
+        file_paths, tree_name, branches, workers=workers,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -69,6 +69,30 @@ class TestServerGetFileStructure:
 
 
 # ---------------------------------------------------------------------------
+# Timeouts, failure messages
+# ---------------------------------------------------------------------------
+
+
+class TestServerLimits:
+    def test_timeout_returns_explanatory_error(self):
+        result = server.get_branch_statistics(LOCAL_FILE, "events", "px", timeout=1e-6)
+        assert "get_branch_statistics" in result["error"]
+        assert "1e-06 s" in result["error"]
+        assert "retry once later" in result["error"]
+        assert result["branch_name"] == "px"
+
+    def test_file_not_found_message(self):
+        result = server.get_file_structure("/no/such/file.root")
+        assert result["error"].startswith("File not found: /no/such/file.root")
+        assert "get_dataset_file_list" in result["error"]
+
+    def test_missing_tree_message_is_one_line(self):
+        result = server.get_tree_info(LOCAL_FILE, "no_such_tree")
+        assert "\n" not in result["error"]
+        assert "get_file_structure" in result["error"]
+
+
+# ---------------------------------------------------------------------------
 # get_tree_info
 # ---------------------------------------------------------------------------
 
