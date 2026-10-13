@@ -32,6 +32,15 @@ DatasetSchemaResult = dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Output limits
+# ---------------------------------------------------------------------------
+
+# Lists that grow with the data (file keys, branches, matched files) are cut
+# here; the result then carries a "truncated: N of M" note next to the list.
+MAX_LISTED_ENTRIES = 1000
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -57,6 +66,17 @@ def _open_file(file_path: str) -> uproot.ReadOnlyFile:
     (``root://server//path/to/file.root``).
     """
     return uproot.open(file_path)
+
+
+def _truncated(items: list, limit: int, what: str, hint: str) -> tuple[list, str | None]:
+    """Cut *items* to *limit* and describe the cut, or return them unchanged.
+
+    Returns ``(items[:limit], "truncated: <limit> of <total> <what>; <hint>")``
+    when the list is longer than *limit*, else ``(items, None)``.
+    """
+    if len(items) <= limit:
+        return items, None
+    return items[:limit], f"truncated: {limit} of {len(items)} {what}; {hint}"
 
 
 def _branch_info(branch: Any, *, include_leaves: bool = True) -> dict[str, Any]:
@@ -108,9 +128,11 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> FileStructure
     - ``elapsed_s``: wall-clock seconds for the operation
 
     Each tree lists at most ``max_branches`` branches (``branches_truncated``
-    says whether more exist); ``num_branches`` is always the full count. An
-    EDM4eic file holds thousands of branches, so an unbounded listing runs to
-    megabytes — use :func:`get_tree_info` for the complete set.
+    says whether more exist, ``truncated`` says how many were cut);
+    ``num_branches`` is always the full count. An EDM4eic file holds thousands
+    of branches, so an unbounded listing runs to megabytes — use
+    :func:`get_tree_info` for the complete set. ``keys`` is cut at
+    :data:`MAX_LISTED_ENTRIES` the same way.
 
     Raises
     ------
@@ -140,6 +162,10 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> FileStructure
                 try:
                     tree = f[key_name]
                     branch_names = list(tree.keys())
+                    listed_names, truncated = _truncated(
+                        branch_names, max_branches, "branches",
+                        "raise max_branches or call get_tree_info",
+                    )
                     trees.append(
                         {
                             "name": base_name,
@@ -150,9 +176,10 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> FileStructure
                             "num_branches": len(branch_names),
                             "branches": [
                                 _branch_info(tree[b], include_leaves=False)
-                                for b in branch_names[:max_branches]
+                                for b in listed_names
                             ],
-                            "branches_truncated": len(branch_names) > max_branches,
+                            "branches_truncated": truncated is not None,
+                            "truncated": truncated,
                         }
                     )
                 except Exception as exc:
@@ -166,27 +193,43 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> FileStructure
                         }
                     )
 
+        keys, truncated = _truncated(
+            keys, MAX_LISTED_ENTRIES, "keys", "inspect trees by name with get_tree_info"
+        )
         result: FileStructure = {
             "file_path": file_path,
             "keys": keys,
             "trees": trees,
+            "truncated": truncated,
         }
     result["elapsed_s"] = round(time.perf_counter() - t0, 6)
     return result
 
 
-def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
+def get_tree_info(
+    file_path: str, tree_name: str, max_branches: int = MAX_LISTED_ENTRIES
+) -> TreeInfo:
     """Return detailed metadata for a single TTree.
 
     Returns a dict with:
     - ``file_path``, ``tree_name``
     - ``num_entries``: total number of entries
-    - ``num_branches``: number of top-level branches
-    - ``branches``: list of branch dicts (name, typename, num_entries,
-      uncompressed_bytes, compressed_bytes, compression_ratio, leaves)
+    - ``num_branches``: number of top-level branches (the full count)
+    - ``branches``: list of at most ``max_branches`` branch dicts (name,
+      typename, num_entries, uncompressed_bytes, compressed_bytes,
+      compression_ratio, leaves)
+    - ``truncated``: ``"truncated: N of M branches; ..."`` when the list was
+      cut, else ``None``
     - ``title``: tree title if available
     - ``elapsed_s``: wall-clock seconds for the operation
+
+    Raises
+    ------
+    ValueError
+        If ``max_branches`` is negative.
     """
+    if max_branches < 0:
+        raise ValueError(f"max_branches must be >= 0, got {max_branches}")
     t0 = time.perf_counter()
     with _open_file(file_path) as f:
         tree = f[tree_name]
@@ -197,15 +240,20 @@ def get_tree_info(file_path: str, tree_name: str) -> TreeInfo:
         except Exception:
             pass
 
-        branches = [_branch_info(tree[b]) for b in tree.keys()]
+        all_branch_names = list(tree.keys())
+        branch_names, truncated = _truncated(
+            all_branch_names, max_branches, "branches", "raise max_branches"
+        )
+        branches = [_branch_info(tree[b]) for b in branch_names]
 
         result: TreeInfo = {
             "file_path": file_path,
             "tree_name": tree.name,
             "title": title,
             "num_entries": int(tree.num_entries),
-            "num_branches": len(branches),
+            "num_branches": len(all_branch_names),
             "branches": branches,
+            "truncated": truncated,
         }
     result["elapsed_s"] = round(time.perf_counter() - t0, 6)
     return result
@@ -743,11 +791,14 @@ def get_dataset_file_list(
     - ``path``: echoed input path
     - ``tree_name``: echoed tree name
     - ``file_paths``: sorted list of file paths that contain *tree_name*
-    - ``n_files``: ``len(file_paths)``
+    - ``n_files``: number of matching files (the full count)
     - ``n_files_missing_tree``: files that exist but lack *tree_name*
     - ``missing_tree_files``: list of those file paths
     - ``n_files_failed``: files that could not be opened (errors)
     - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
+    - ``truncated``: ``"truncated: N of M files; ..."`` when ``file_paths``
+      was cut at :data:`MAX_LISTED_ENTRIES`, else ``None``; the other two
+      lists are cut the same way
     - ``elapsed_s``: wall-clock seconds
     """
     if workers < 1:
@@ -784,16 +835,25 @@ def get_dataset_file_list(
     file_paths.sort()
     missing_tree_files.sort()
     failed_files.sort(key=lambda d: d["file"])
+    narrower_hint = "use a narrower glob pattern"
+    listed_paths, truncated = _truncated(
+        file_paths, MAX_LISTED_ENTRIES, "files", narrower_hint
+    )
+    listed_missing, _ = _truncated(
+        missing_tree_files, MAX_LISTED_ENTRIES, "files", narrower_hint
+    )
+    listed_failed, _ = _truncated(failed_files, MAX_LISTED_ENTRIES, "files", narrower_hint)
 
     return {
         "path": path,
         "tree_name": tree_name,
-        "file_paths": file_paths,
+        "file_paths": listed_paths,
         "n_files": len(file_paths),
         "n_files_missing_tree": len(missing_tree_files),
-        "missing_tree_files": missing_tree_files,
+        "missing_tree_files": listed_missing,
         "n_files_failed": len(failed_files),
-        "failed_files": failed_files,
+        "failed_files": listed_failed,
+        "truncated": truncated,
         "elapsed_s": round(time.perf_counter() - t0, 6),
     }
 

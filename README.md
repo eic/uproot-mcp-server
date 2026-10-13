@@ -253,13 +253,16 @@ For scalar or dict results, `result_type` is `"scalar"` or `"dict"` and paginati
 
 **Execution timeout:** kernels run in an isolated subprocess that is forcefully terminated (SIGTERM then SIGKILL) after the tool's `timeout`.
 
-### Timeouts and errors
+### Timeouts and truncation
 
 Every tool that reads data takes `timeout` (seconds; default 60, dataset tools 300).
 On expiry the tool returns `{"error": "<tool> did not finish within N s. ..."}` with
 what to try (smaller entry range, fewer files, retry once later: the server handles one
-call at a time). Expected failures (missing file, tree or branch) come back as an
-`error` string that names the tool to call next.
+call at a time). Lists that grow with the data (keys, branches, matched files) stop at
+1000 entries (`max_branches` for branch listings) and the result carries a
+`"truncated": "truncated: N of M ...; <what to change>"` note; a result over 1 MB is
+replaced by an error with the same advice. Expected failures (missing file, tree or
+branch) come back as an `error` string that names the tool to call next.
 
 ## Development
 
