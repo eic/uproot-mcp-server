@@ -125,6 +125,7 @@ def _run_tool(
     try:
         result = _json_safe(future.result(timeout=timeout))
     except FutureTimeoutError:
+        future.cancel()
         return {"error": _timeout_message(tool_name, timeout), **context}
     except Exception as exc:
         return {"error": _failure_message(exc, context), **context}

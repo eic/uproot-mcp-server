@@ -726,3 +726,20 @@ class TestTransportCli:
             assert server.mcp.settings.streamable_http_path == "/mcp"
         else:
             assert calls == {"transport": "sse", "host": "localhost", "port": 9998}
+
+
+def test_timed_out_call_is_not_run_later(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from uproot_mcp_server import server
+
+    monkeypatch.setattr(server, "_tool_executor", ThreadPoolExecutor(max_workers=1))
+    release = threading.Event()
+    ran = []
+    server._tool_executor.submit(release.wait)
+    result = server._run_tool("t", lambda: ran.append(1), 0.1, {})
+    assert "error" in result
+    release.set()
+    server._tool_executor.shutdown(wait=True)
+    assert ran == []
