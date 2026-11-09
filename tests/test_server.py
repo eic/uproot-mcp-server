@@ -787,3 +787,15 @@ def test_unserializable_result_is_an_error():
 
     result = server._run_tool("t", lambda: {"v": {object()}}, 5, {})
     assert "error" in result
+
+
+def test_oversized_job_result_says_resubmit(monkeypatch):
+    from uproot_mcp_server import server
+
+    class Store:
+        def result(self, job_id):
+            return {"x": "y" * 200}
+
+    monkeypatch.setattr(server, "MAX_RESPONSE_BYTES", 100)
+    monkeypatch.setattr(server, "_job_store", Store())
+    assert "Resubmit the job" in server.get_job_result("j1")["error"]

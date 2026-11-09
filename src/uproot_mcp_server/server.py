@@ -138,11 +138,15 @@ def _failure_message(exc: Exception, context: dict[str, Any]) -> str:
     return first_line
 
 
-def _oversized_message(tool_name: str, size: int) -> str:
+def _oversized_message(
+    tool_name: str,
+    size: int,
+    advice: str = "Narrow the call: a smaller page_size or max_branches, fewer "
+    "files, or reduce the result inside the kernel.",
+) -> str:
     return (
         f"{tool_name} produced {size} bytes, more than the {MAX_RESPONSE_BYTES}-byte "
-        "limit. Narrow the call: a smaller page_size or max_branches, fewer "
-        "files, or reduce the result inside the kernel."
+        f"limit. {advice}"
     )
 
 
@@ -854,7 +858,8 @@ def get_job_result(job_id: str, page: int = 0, page_size: int = 1000) -> dict[st
     except Exception as exc:
         return {"error": str(exc), "job_id": job_id}
     if size > MAX_RESPONSE_BYTES:
-        return {"error": _oversized_message("get_job_result", size), "job_id": job_id}
+        advice = "Resubmit the job with a smaller page_size, or reduce the result inside the kernel."
+        return {"error": _oversized_message("get_job_result", size, advice), "job_id": job_id}
     return result
 
 
