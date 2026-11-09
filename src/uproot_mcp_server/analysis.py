@@ -839,10 +839,14 @@ def get_dataset_file_list(
     listed_paths, truncated = _truncated(
         file_paths, MAX_LISTED_ENTRIES, "files", narrower_hint
     )
-    listed_missing, _ = _truncated(
-        missing_tree_files, MAX_LISTED_ENTRIES, "files", narrower_hint
+    listed_missing, truncated_missing = _truncated(
+        missing_tree_files, MAX_LISTED_ENTRIES, "files without the tree", narrower_hint
     )
-    listed_failed, _ = _truncated(failed_files, MAX_LISTED_ENTRIES, "files", narrower_hint)
+    listed_failed, truncated_failed = _truncated(
+        failed_files, MAX_LISTED_ENTRIES, "unreadable files", narrower_hint
+    )
+    notes = [note for note in (truncated, truncated_missing, truncated_failed) if note]
+    truncated = "; ".join(notes) or None
 
     return {
         "path": path,

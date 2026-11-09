@@ -1104,3 +1104,13 @@ class TestEstimateDatasetCost:
             sample_files=10,
         )
         assert result["sample_files_used"] == 1
+
+
+def test_missing_tree_files_truncation_note(tmp_path, monkeypatch):
+    import shutil
+    for name in ("a.root", "b.root"):
+        shutil.copy(LOCAL_FILE, tmp_path / name)
+    monkeypatch.setattr(analysis, "MAX_LISTED_ENTRIES", 1)
+    result = analysis.get_dataset_file_list(str(tmp_path / "*.root"), "no_such_tree")
+    assert len(result["missing_tree_files"]) == 1
+    assert "truncated: 1 of 2 files without the tree" in result["truncated"]
