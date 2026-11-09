@@ -1114,3 +1114,10 @@ def test_missing_tree_files_truncation_note(tmp_path, monkeypatch):
     result = analysis.get_dataset_file_list(str(tmp_path / "*.root"), "no_such_tree")
     assert len(result["missing_tree_files"]) == 1
     assert "truncated: 1 of 2 files without the tree" in result["truncated"]
+
+
+def test_trees_listing_capped(monkeypatch):
+    monkeypatch.setattr(analysis, "MAX_LISTED_ENTRIES", 0)
+    result = analysis.get_file_structure(LOCAL_FILE)
+    assert result["trees"] == []
+    assert "trees" in result["truncated"]

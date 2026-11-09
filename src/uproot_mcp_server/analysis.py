@@ -196,6 +196,10 @@ def get_file_structure(file_path: str, max_branches: int = 100) -> FileStructure
         keys, truncated = _truncated(
             keys, MAX_LISTED_ENTRIES, "keys", "inspect trees by name with get_tree_info"
         )
+        trees, truncated_trees = _truncated(
+            trees, MAX_LISTED_ENTRIES, "trees", "inspect trees by name with get_tree_info"
+        )
+        truncated = "; ".join(note for note in (truncated, truncated_trees) if note) or None
         result: FileStructure = {
             "file_path": file_path,
             "keys": keys,
