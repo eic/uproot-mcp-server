@@ -133,7 +133,9 @@ def _run_tool(
     future.add_done_callback(lambda _: _tool_slots.release())
     try:
         result = _json_safe(future.result(timeout=max(0.0, deadline - time.monotonic())))
-    except FutureTimeoutError:
+    except FutureTimeoutError as exc:
+        if future.done():
+            return {"error": _failure_message(exc, context), **context}
         return {"error": _timeout_message(tool_name, timeout), **context}
     except Exception as exc:
         return {"error": _failure_message(exc, context), **context}
