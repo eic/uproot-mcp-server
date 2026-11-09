@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any
@@ -55,7 +57,10 @@ _job_store = JobStore()
 
 # Worker threads for tool calls. A timed-out call keeps its worker busy until
 # the read finishes, so the pool bounds how many such reads can pile up.
-_tool_executor = ThreadPoolExecutor(max_workers=4)
+_TOOL_WORKERS = 4
+_tool_executor = ThreadPoolExecutor(max_workers=_TOOL_WORKERS)
+# A call is submitted only when a worker is free, so nothing waits in the queue.
+_tool_slots = threading.BoundedSemaphore(_TOOL_WORKERS)
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +126,14 @@ def _run_tool(
     worker busy until the read finishes; once all workers are busy, new calls
     wait and time out.
     """
+    deadline = time.monotonic() + timeout
+    if not _tool_slots.acquire(timeout=timeout):
+        return {"error": _timeout_message(tool_name, timeout), **context}
     future = _tool_executor.submit(function, *args, **kwargs)
+    future.add_done_callback(lambda _: _tool_slots.release())
     try:
-        result = _json_safe(future.result(timeout=timeout))
+        result = _json_safe(future.result(timeout=max(0.0, deadline - time.monotonic())))
     except FutureTimeoutError:
-        future.cancel()
         return {"error": _timeout_message(tool_name, timeout), **context}
     except Exception as exc:
         return {"error": _failure_message(exc, context), **context}
