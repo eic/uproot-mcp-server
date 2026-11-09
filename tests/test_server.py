@@ -780,3 +780,10 @@ def test_backend_timeout_is_a_failure():
     result = server._run_tool("t", backend, 5, {})
     assert "read timed out" in result["error"]
     assert "did not finish within" not in result["error"]
+
+
+def test_unserializable_result_is_an_error():
+    from uproot_mcp_server import server
+
+    result = server._run_tool("t", lambda: {"v": {object()}}, 5, {})
+    assert "error" in result

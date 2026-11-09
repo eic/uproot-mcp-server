@@ -170,13 +170,13 @@ def _run_tool(
     future.add_done_callback(lambda _: _tool_slots.release())
     try:
         result = _json_safe(future.result(timeout=max(0.0, deadline - time.monotonic())))
+        size = len(json.dumps(result))
     except FutureTimeoutError as exc:
         if future.done():
             return {"error": _failure_message(exc, context), **context}
         return {"error": _timeout_message(tool_name, timeout), **context}
     except Exception as exc:
         return {"error": _failure_message(exc, context), **context}
-    size = len(json.dumps(result))
     if size > MAX_RESPONSE_BYTES:
         return {"error": _oversized_message(tool_name, size), **context}
     return result
@@ -846,10 +846,13 @@ def get_job_result(job_id: str, page: int = 0, page_size: int = 1000) -> dict[st
     except Exception as exc:
         return {"error": str(exc), "job_id": job_id}
 
-    result = _json_safe(raw)
-    if isinstance(result, dict):
-        result["job_id"] = job_id
-    size = len(json.dumps(result))
+    try:
+        result = _json_safe(raw)
+        if isinstance(result, dict):
+            result["job_id"] = job_id
+        size = len(json.dumps(result))
+    except Exception as exc:
+        return {"error": str(exc), "job_id": job_id}
     if size > MAX_RESPONSE_BYTES:
         return {"error": _oversized_message("get_job_result", size), "job_id": job_id}
     return result
