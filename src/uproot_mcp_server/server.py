@@ -13,6 +13,7 @@ Run with::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import threading
 import time
@@ -35,6 +36,9 @@ from uproot_mcp_server.jobs import JobStore
 # Wall-clock limit per tool call, in seconds; dataset tools get a longer one.
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_DATASET_TIMEOUT_SECONDS = 300.0
+# A result serialised to more than this is replaced by an error that says how
+# to shrink it (``analysis.MAX_LISTED_ENTRIES`` caps the lists before that).
+MAX_RESPONSE_BYTES = 1_000_000
 
 # ---------------------------------------------------------------------------
 # Server setup
@@ -45,7 +49,32 @@ mcp = FastMCP(
     instructions=(
         "An MCP server for analysing ROOT files with uproot. "
         "Supports local paths and XRootD URLs (root://server//path). "
-        "All tools return JSON-serialisable dictionaries."
+        "All tools return JSON-serialisable dictionaries; a failure is a dict "
+        "with an 'error' string that says what to try next, never an exception.\n"
+        "Tools:\n"
+        "- get_file_structure: keys and a per-tree summary (branches capped by max_branches).\n"
+        "- get_tree_info: all branches and leaves of one tree (capped by max_branches).\n"
+        "- get_branch_statistics: count/mean/std/min/max/percentiles of one branch, optional cut and entry range.\n"
+        "- histogram_branch: 1-D histogram of one branch, optional cut, range and entry range.\n"
+        "- execute_kernel: run sandboxed Python (np, ak) over branches of one file; array results are paged.\n"
+        "- histogram_dataset: one histogram accumulated over many files.\n"
+        "- get_dataset_statistics: streaming mean/std/min/max over many files (no percentiles).\n"
+        "- execute_kernel_dataset: run a kernel per file and reduce the results.\n"
+        "- estimate_dataset_cost: time a kernel on a sample and extrapolate to the dataset.\n"
+        "- get_dataset_file_list: files matching a glob that contain a tree.\n"
+        "- validate_dataset_schema: check that every file has the tree and branches.\n"
+        "- submit_kernel_dataset / get_job_status / get_job_result / cancel_job: "
+        "the dataset kernel as a background job.\n"
+        f"Timeouts: every tool that reads data takes 'timeout' in seconds "
+        f"(default {DEFAULT_TIMEOUT_SECONDS:g}, dataset tools "
+        f"{DEFAULT_DATASET_TIMEOUT_SECONDS:g}); on expiry the tool returns an "
+        "error naming the tool and the limit, and the server handles one call "
+        "at a time, so narrow the call or retry once later.\n"
+        f"Truncation: lists that grow with the data (keys, branches, matched "
+        f"files) stop at {analysis.MAX_LISTED_ENTRIES} entries and the result "
+        "carries a 'truncated: N of M ...' note with the parameter to change; "
+        f"a result over {MAX_RESPONSE_BYTES} bytes is replaced by an error with "
+        "the same advice. Array results of kernels are paged (page, page_size)."
     ),
 )
 
@@ -109,6 +138,18 @@ def _failure_message(exc: Exception, context: dict[str, Any]) -> str:
     return first_line
 
 
+def _oversized_message(
+    tool_name: str,
+    size: int,
+    advice: str = "Narrow the call: a smaller page_size or max_branches, fewer "
+    "files, or reduce the result inside the kernel.",
+) -> str:
+    return (
+        f"{tool_name} produced {size} bytes, more than the {MAX_RESPONSE_BYTES}-byte "
+        f"limit. {advice}"
+    )
+
+
 def _run_tool(
     tool_name: str,
     function: Any,
@@ -121,7 +162,7 @@ def _run_tool(
     """Run ``function(*args, **kwargs)`` in a worker thread under *timeout*.
 
     Returns the JSON-safe result, or ``{"error": ..., **context}`` when the
-    call times out or fails.
+    call times out, fails, or produces more than ``MAX_RESPONSE_BYTES``.
     The worker thread cannot be interrupted, so an expired call keeps its
     worker busy until the read finishes; once all workers are busy, new calls
     wait and time out.
@@ -133,12 +174,15 @@ def _run_tool(
     future.add_done_callback(lambda _: _tool_slots.release())
     try:
         result = _json_safe(future.result(timeout=max(0.0, deadline - time.monotonic())))
+        size = len(json.dumps(result))
     except FutureTimeoutError as exc:
         if future.done():
             return {"error": _failure_message(exc, context), **context}
         return {"error": _timeout_message(tool_name, timeout), **context}
     except Exception as exc:
         return {"error": _failure_message(exc, context), **context}
+    if size > MAX_RESPONSE_BYTES:
+        return {"error": _oversized_message(tool_name, size), **context}
     return result
 
 
@@ -180,6 +224,8 @@ def get_file_structure(
       ``num_entries``, ``num_branches`` (the full count), ``branches_truncated``,
       and a ``branches`` list, capped at ``max_branches``, with basic per-branch
       metadata
+    - ``truncated``: ``"truncated: N of M ..."`` note on the file (keys) and
+      on each tree (branches) when a list was cut, else ``None``
     """
     return _run_tool(
         "get_file_structure", analysis.get_file_structure, timeout,
@@ -192,6 +238,7 @@ def get_file_structure(
 def get_tree_info(
     file_path: str,
     tree_name: str,
+    max_branches: int = analysis.MAX_LISTED_ENTRIES,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Return detailed metadata for a single TTree including all branches and leaves.
@@ -202,6 +249,8 @@ def get_tree_info(
         Local path or XRootD URL to the ROOT file.
     tree_name:
         Name of the TTree to inspect (e.g. ``"events"`` or ``"events;1"``).
+    max_branches:
+        Maximum number of branches listed (default 1000; must be >= 0).
     timeout:
         Wall-clock limit in seconds (default 60).
 
@@ -211,17 +260,19 @@ def get_tree_info(
 
     - ``file_path``, ``tree_name``, ``title``
     - ``num_entries``: total number of entries in the tree
-    - ``num_branches``: number of top-level branches
-    - ``branches``: list of branch dicts, each containing:
+    - ``num_branches``: number of top-level branches (the full count)
+    - ``branches``: list of at most ``max_branches`` branch dicts, each containing:
         - ``name``, ``typename``
         - ``num_entries``
         - ``uncompressed_bytes``, ``compressed_bytes``, ``compression_ratio``
         - ``leaves``: list of leaf dicts (``name``, ``typename``)
+    - ``truncated``: ``"truncated: N of M branches; ..."`` when the list was
+      cut, else ``None``
     """
     return _run_tool(
         "get_tree_info", analysis.get_tree_info, timeout,
         {"file_path": file_path, "tree_name": tree_name},
-        file_path, tree_name,
+        file_path, tree_name, max_branches=max_branches,
     )
 
 
@@ -799,9 +850,16 @@ def get_job_result(job_id: str, page: int = 0, page_size: int = 1000) -> dict[st
     except Exception as exc:
         return {"error": str(exc), "job_id": job_id}
 
-    result = _json_safe(raw)
-    if isinstance(result, dict):
-        result["job_id"] = job_id
+    try:
+        result = _json_safe(raw)
+        if isinstance(result, dict):
+            result["job_id"] = job_id
+        size = len(json.dumps(result))
+    except Exception as exc:
+        return {"error": str(exc), "job_id": job_id}
+    if size > MAX_RESPONSE_BYTES:
+        advice = "Resubmit the job with a smaller page_size, or reduce the result inside the kernel."
+        return {"error": _oversized_message("get_job_result", size, advice), "job_id": job_id}
     return result
 
 
@@ -864,12 +922,15 @@ def get_dataset_file_list(
 
     - ``path``: echoed input path
     - ``tree_name``: echoed tree name
-    - ``file_paths``: sorted list of file paths that contain *tree_name*
-    - ``n_files``: number of matching files
+    - ``file_paths``: sorted list of file paths that contain *tree_name*,
+      at most 1000 entries
+    - ``n_files``: number of matching files (the full count)
     - ``n_files_missing_tree``: count of files that exist but lack *tree_name*
     - ``missing_tree_files``: those file paths
     - ``n_files_failed``: count of files that could not be opened
     - ``failed_files``: ``[{"file": ..., "error": ...}]`` for unreadable files
+    - ``truncated``: ``"truncated: N of M files; ..."`` when ``file_paths``
+      was cut, else ``None``
     - ``elapsed_s``: wall-clock seconds
     """
     return _run_tool(

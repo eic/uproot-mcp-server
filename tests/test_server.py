@@ -70,7 +70,7 @@ class TestServerGetFileStructure:
 
 
 # ---------------------------------------------------------------------------
-# Timeouts, failure messages
+# Timeouts, truncation, failure messages
 # ---------------------------------------------------------------------------
 
 
@@ -81,6 +81,22 @@ class TestServerLimits:
         assert "1e-06 s" in result["error"]
         assert "retry once later" in result["error"]
         assert result["branch_name"] == "px"
+
+    def test_truncation_marker(self):
+        result = server.get_tree_info(LOCAL_FILE, "events", max_branches=2)
+        assert len(result["branches"]) == 2
+        assert result["num_branches"] == 5
+        assert result["truncated"] == "truncated: 2 of 5 branches; raise max_branches"
+
+    def test_no_truncation_marker_when_complete(self):
+        result = server.get_tree_info(LOCAL_FILE, "events")
+        assert result["truncated"] is None
+
+    def test_oversized_result_returns_error(self, monkeypatch):
+        monkeypatch.setattr(server, "MAX_RESPONSE_BYTES", 10)
+        result = server.get_file_structure(LOCAL_FILE)
+        assert "get_file_structure" in result["error"]
+        assert "10-byte limit" in result["error"]
 
     def test_file_not_found_message(self):
         result = server.get_file_structure("/no/such/file.root")
@@ -105,6 +121,15 @@ class TestServerLimits:
         )
         assert "error" in result
         assert time.perf_counter() - started < 5
+
+    def test_instructions_list_every_tool(self):
+        for tool in ("get_file_structure", "get_tree_info", "get_branch_statistics",
+                     "histogram_branch", "execute_kernel", "histogram_dataset",
+                     "get_dataset_statistics", "execute_kernel_dataset",
+                     "estimate_dataset_cost", "get_dataset_file_list",
+                     "validate_dataset_schema", "submit_kernel_dataset",
+                     "get_job_status", "get_job_result", "cancel_job"):
+            assert tool in server.mcp.instructions
 
 
 # ---------------------------------------------------------------------------
@@ -755,3 +780,22 @@ def test_backend_timeout_is_a_failure():
     result = server._run_tool("t", backend, 5, {})
     assert "read timed out" in result["error"]
     assert "did not finish within" not in result["error"]
+
+
+def test_unserializable_result_is_an_error():
+    from uproot_mcp_server import server
+
+    result = server._run_tool("t", lambda: {"v": {object()}}, 5, {})
+    assert "error" in result
+
+
+def test_oversized_job_result_says_resubmit(monkeypatch):
+    from uproot_mcp_server import server
+
+    class Store:
+        def result(self, job_id):
+            return {"x": "y" * 200}
+
+    monkeypatch.setattr(server, "MAX_RESPONSE_BYTES", 100)
+    monkeypatch.setattr(server, "_job_store", Store())
+    assert "Resubmit the job" in server.get_job_result("j1")["error"]

@@ -95,6 +95,12 @@ class TestGetFileStructure:
         with pytest.raises(ValueError):
             analysis.get_file_structure(LOCAL_FILE, max_branches=-1)
 
+    def test_truncation_note(self):
+        result = analysis.get_file_structure(LOCAL_FILE, max_branches=1)
+        tree = result["trees"][0]
+        assert tree["truncated"].startswith(f"truncated: 1 of {tree['num_branches']} branches")
+        assert result["truncated"] is None
+
     def test_file_path_echoed(self):
         result = analysis.get_file_structure(LOCAL_FILE)
         assert result["file_path"] == LOCAL_FILE
@@ -1098,3 +1104,20 @@ class TestEstimateDatasetCost:
             sample_files=10,
         )
         assert result["sample_files_used"] == 1
+
+
+def test_missing_tree_files_truncation_note(tmp_path, monkeypatch):
+    import shutil
+    for name in ("a.root", "b.root"):
+        shutil.copy(LOCAL_FILE, tmp_path / name)
+    monkeypatch.setattr(analysis, "MAX_LISTED_ENTRIES", 1)
+    result = analysis.get_dataset_file_list(str(tmp_path / "*.root"), "no_such_tree")
+    assert len(result["missing_tree_files"]) == 1
+    assert "truncated: 1 of 2 files without the tree" in result["truncated"]
+
+
+def test_trees_listing_capped(monkeypatch):
+    monkeypatch.setattr(analysis, "MAX_LISTED_ENTRIES", 0)
+    result = analysis.get_file_structure(LOCAL_FILE)
+    assert result["trees"] == []
+    assert "trees" in result["truncated"]
