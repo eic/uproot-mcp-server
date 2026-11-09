@@ -12,6 +12,7 @@ from __future__ import annotations
 import inspect
 import json
 import sys
+import time
 import pathlib
 
 import pytest
@@ -66,6 +67,44 @@ class TestServerGetFileStructure:
         result = server.get_file_structure("/no/such/file.root")
         assert "error" in result
         assert "elapsed_s" not in result
+
+
+# ---------------------------------------------------------------------------
+# Timeouts, failure messages
+# ---------------------------------------------------------------------------
+
+
+class TestServerLimits:
+    def test_timeout_returns_explanatory_error(self):
+        result = server.get_branch_statistics(LOCAL_FILE, "events", "px", timeout=1e-6)
+        assert "get_branch_statistics" in result["error"]
+        assert "1e-06 s" in result["error"]
+        assert "retry once later" in result["error"]
+        assert result["branch_name"] == "px"
+
+    def test_file_not_found_message(self):
+        result = server.get_file_structure("/no/such/file.root")
+        assert result["error"].startswith("File not found: /no/such/file.root")
+        assert "get_dataset_file_list" in result["error"]
+
+    def test_missing_tree_message_is_one_line(self):
+        result = server.get_tree_info(LOCAL_FILE, "no_such_tree")
+        assert "\n" not in result["error"]
+        assert "get_file_structure" in result["error"]
+
+    def test_missing_branch_message_names_get_tree_info(self):
+        result = server.execute_kernel(LOCAL_FILE, "events", "result = px", ["no_such_branch"])
+        assert "no_such_branch" in result["error"]
+        assert "get_tree_info" in result["error"]
+
+    def test_estimate_dataset_cost_forwards_timeout(self):
+        started = time.perf_counter()
+        result = server.estimate_dataset_cost(
+            [LOCAL_FILE], "events", "while True:\n    pass\nresult = 1", ["px"],
+            sample_files=1, entries_per_file=10, timeout=1,
+        )
+        assert "error" in result
+        assert time.perf_counter() - started < 5
 
 
 # ---------------------------------------------------------------------------
@@ -687,3 +726,32 @@ class TestTransportCli:
             assert server.mcp.settings.streamable_http_path == "/mcp"
         else:
             assert calls == {"transport": "sse", "host": "localhost", "port": 9998}
+
+
+def test_busy_workers_do_not_queue_calls(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from uproot_mcp_server import server
+
+    monkeypatch.setattr(server, "_tool_executor", ThreadPoolExecutor(max_workers=1))
+    monkeypatch.setattr(server, "_tool_slots", threading.BoundedSemaphore(1))
+    release = threading.Event()
+    ran = []
+    busy = server._run_tool("t", release.wait, 0.1, {})
+    queued = server._run_tool("t", lambda: ran.append(1), 0.1, {})
+    assert "error" in busy and "error" in queued
+    release.set()
+    server._tool_executor.shutdown(wait=True)
+    assert ran == []
+
+
+def test_backend_timeout_is_a_failure():
+    from uproot_mcp_server import server
+
+    def backend():
+        raise TimeoutError("read timed out")
+
+    result = server._run_tool("t", backend, 5, {})
+    assert "read timed out" in result["error"]
+    assert "did not finish within" not in result["error"]
